@@ -86,10 +86,10 @@ class FileManagerGUI:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"hostsandips": {}, "serverconfig": {"PORT": "6666"}}
+            return {"server_config": {"PORT": "6666"}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"hostsandips": {}, "serverconfig": {"PORT": "6666"}}
+            return {"server_config": {"PORT": "6666"}}
 
     def create_widgets(self):
         connect_frame = ttk.LabelFrame(self.root, text="Подключение к серверу", padding=10)
@@ -221,7 +221,7 @@ class FileManagerGUI:
         user_input = self.server_ip.get().strip()
         ip = user_input
 
-        port_str = self.config.get("serverconfig", {}).get("PORT", "6666")
+        port_str = self.config.get("server_config", {}).get("PORT", "6666")
         try:
             port = int(port_str)
         except ValueError:
@@ -238,10 +238,10 @@ class FileManagerGUI:
                 self.progress_queue.put({'status': f'Подключение к {ip}:{port}...'})
 
                 if self.client.connect():
-                    self.progress_queue.put({'status': f'Подключено к {ip}:{port} ({user_input})'})
+                    self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
 
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
-                    self.status_var.set(f"Подключено к {ip}:{port} ({user_input})")
+                    self.status_var.set(f"Подключено к {ip}:{port}")
                     success = True
                     self.connected = True
                 else:

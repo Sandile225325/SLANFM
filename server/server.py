@@ -61,7 +61,7 @@ class FileServer:
             if 'chunk_size' in config:
                 new_chunk = config['chunk_size']
                 if isinstance(new_chunk, int) and new_chunk > 0:
-                    self.CHUNK_SIZE = new_chunk
+                    self.chunk_size = new_chunk
                 else:
                     logging.warning(f"Некорректный chunk_size в конфиге: {new_chunk}. Используется значение {self.CHUNK_SIZE}")
 
@@ -88,7 +88,8 @@ class FileServer:
 
     def start(self):
         if not self.is_port_available():
-            logging.error(f"Порт {self.port} уже занят!")
+            logging.error(f"Порт {self.port} уже занят!\nНажмите enter для выхода...")
+            input()
             return
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -129,7 +130,7 @@ class FileServer:
         try:
             self.send_response(client_socket, {
                 'type': 'init',
-                'chunk_size': self.CHUNK_SIZE,
+                'chunk_size': self.chunk_size,
                 'max_file_size': self.max_file_size,
                 'timeout': self.timeout
             })
@@ -226,7 +227,7 @@ class FileServer:
             sent_total = 0
             with open(filepath, 'rb') as f:
                 while True:
-                    chunk = f.read(self.CHUNK_SIZE)
+                    chunk = f.read(self.chunk_size)
                     if not chunk:
                         break
 
@@ -239,7 +240,7 @@ class FileServer:
 
                     sent_total += len(chunk)
 
-                    if sent_total % (10 * 1024 * 1024) < self.CHUNK_SIZE:
+                    if sent_total % (10 * 1024 * 1024) < self.chunk_size:
                         percent = (sent_total / file_size) * 100
                         logging.info(f"Отправка {filename}: {percent:.1f}% ({sent_total}/{file_size} байт)")
 
@@ -282,7 +283,7 @@ class FileServer:
                         f.write(chunk)
                         received += len(chunk)
 
-                        if received % (10 * 1024 * 1024) < self.CHUNK_SIZE:
+                        if received % (10 * 1024 * 1024) < self.chunk_size:
                             percent = (received / file_size) * 100
                             logging.info(f"Прием {filename}: {percent:.1f}% ({received}/{file_size} байт)")
 

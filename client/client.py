@@ -152,7 +152,7 @@ class FileClient:
                     try:
                         self.socket.sendall(struct.pack('>I', chunk_size))
                         self.socket.sendall(chunk)
-                    except (ConnectionError, BrokenPipeError) as e:
+                    except (ConnectionError, BrokenPipeError):
                         return False
 
                     uploaded += len(chunk)
@@ -213,7 +213,7 @@ class FileClient:
                 data += chunk
             except socket.timeout:
                 break
-            except:
+            except Exception:
                 break
         return data
 
