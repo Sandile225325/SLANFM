@@ -4,53 +4,136 @@ import os
 import json
 import hashlib
 from pathlib import Path
+import logging
 import struct
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class FileServer:
-    def __init__(self, host, port, upload_dir):
+    def __init__(self, host='0.0.0.0', port=6666, upload_dir='server_files', config_path='server_config.json'):
         self.host = host
         self.port = port
         self.upload_dir = Path(upload_dir)
         self.upload_dir.mkdir(exist_ok=True)
-        self.max_file_size = 2 * 1024 * 1024 * 1024
-        self.chunk_size = 65536
+        self.clients = {}
+        self.lock = threading.Lock()
         self.server = None
+        self.max_file_size = 2 * 1024 * 1024 * 1024
+        self.CHUNK_SIZE = 65536
+        self.timeout = 120
+        self.can_clients_delete_files = True
+
+        if config_path:
+            self.load_config(config_path)
+
+    def load_config(self, config_path):
+        try:
+            config_file = Path(config_path)
+            if not config_file.is_file():
+                logging.warning(f"Файл конфигурации {config_path} не найден. Используются значения по умолчанию.")
+                return
+
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+
+            if 'host' in config:
+                self.host = config['host']
+
+            if 'port' in config:
+                new_port = config['port']
+                if isinstance(new_port, int) and 1 <= new_port <= 65535:
+                    self.port = new_port
+                else:
+                    logging.warning(f"Некорректный порт в конфиге: {new_port}. Используется значение {self.port}")
+
+            if 'upload_dir' in config:
+                self.upload_dir = Path(config['upload_dir'])
+                self.upload_dir.mkdir(exist_ok=True)
+
+            if 'max_file_size' in config:
+                new_max_size = config['max_file_size']
+                if isinstance(new_max_size, int) and new_max_size > 0:
+                    self.max_file_size = new_max_size
+                else:
+                    logging.warning(f"Некорректный max_file_size в конфиге: {new_max_size}. Используется значение {self.max_file_size}")
+
+            if 'chunk_size' in config:
+                new_chunk = config['chunk_size']
+                if isinstance(new_chunk, int) and new_chunk > 0:
+                    self.CHUNK_SIZE = new_chunk
+                else:
+                    logging.warning(f"Некорректный chunk_size в конфиге: {new_chunk}. Используется значение {self.CHUNK_SIZE}")
+
+            if 'timeout' in config:
+                new_timeout = config['timeout']
+                if isinstance(new_timeout, int) and new_timeout > 0:
+                    self.timeout = new_timeout
+                else:
+                    logging.warning(f"Некорректный timeout в конфиге: {new_timeout}. Используется значение {self.timeout}")
+
+            if 'can_clients_delete_files' in config:
+                can_clients_delete_files = config['can_clients_delete_files']
+                if isinstance(can_clients_delete_files, bool):
+                    self.can_clients_delete_files = can_clients_delete_files
+                else:
+                    logging.warning(f"Некорректный can_clients_delete_files в конфиге: {can_clients_delete_files}. Используется значение {self.can_clients_delete_files}")
+
+            logging.info(f"Конфигурация загружена из {config_path}")
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Ошибка парсинга JSON в конфигурации {config_path}: {e}")
+        except Exception as e:
+            logging.error(f"Ошибка загрузки конфигурации: {e}")
 
     def start(self):
         if not self.is_port_available():
-            print(f"Порт {self.port} недоступен.\nНажмите enter для выхода...")
-            input()
+            logging.error(f"Порт {self.port} уже занят!")
             return
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
         self.server.listen(5)
-        print(f"Сервер запущен на порту {self.port}")
-        print(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
+        logging.info(f"Сервер запущен на {self.host}:{self.port}")
+        logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
 
-        while True:
-            client_socket, address = self.server.accept()
-            client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            while True:
+                client_socket, address = self.server.accept()
+                client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            client_thread = threading.Thread(target=self.handle_client, args=(client_socket, address))
-            client_thread.daemon = True
-            client_thread.start()
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, address)
+                )
+                client_thread.daemon = True
+                client_thread.start()
+        except KeyboardInterrupt:
+            logging.info("Остановка сервера...")
+        finally:
+            if self.server:
+                self.server.close()
 
     def is_port_available(self):
-        if self.port < 1024 or self.port > 65535:
-            return False
         try:
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             test_sock.bind((self.host, self.port))
             test_sock.close()
             return True
-        except OSError:
+        except OSError as e:
+            logging.warning(f"Порт {self.port} недоступен.")
             return False
 
     def handle_client(self, client_socket, address):
         try:
+            self.send_response(client_socket, {
+                'type': 'init',
+                'chunk_size': self.CHUNK_SIZE,
+                'max_file_size': self.max_file_size,
+                'timeout': self.timeout
+            })
+
             while True:
                 command_data = self.receive_all(client_socket, 4)
                 if not command_data or len(command_data) != 4:
@@ -65,7 +148,7 @@ class FileServer:
                 try:
                     command = json.loads(json_data.decode('utf-8'))
                 except UnicodeDecodeError:
-                    print(f"Ошибка декодирования JSON от {address}")
+                    logging.error(f"Ошибка декодирования JSON от {address}")
                     break
 
                 cmd = command.get('command')
@@ -86,7 +169,7 @@ class FileServer:
                     self.send_response(client_socket, {'status': 'error', 'message': 'Неизвестная команда'})
 
         except Exception as e:
-            print(f"Ошибка с клиентом {address}: {e}")
+            logging.error(f"Ошибка с клиентом {address}: {e}", exc_info=True)
         finally:
             try:
                 client_socket.close()
@@ -98,9 +181,16 @@ class FileServer:
             files = []
             for f in self.upload_dir.iterdir():
                 if f.is_file():
-                    files.append({'name': f.name, 'size': f.stat().st_size, 'modified': f.stat().st_mtime})
+                    files.append({
+                        'name': f.name,
+                        'size': f.stat().st_size,
+                        'modified': f.stat().st_mtime
+                    })
 
-            response = {'status': 'success', 'files': files}
+            response = {
+                'status': 'success',
+                'files': files
+            }
             self.send_response(client_socket, response)
         except Exception as e:
             self.send_response(client_socket, {'status': 'error', 'message': str(e)})
@@ -121,16 +211,22 @@ class FileServer:
                 for chunk in iter(lambda: f.read(8192), b''):
                     md5_hash.update(chunk)
 
-            self.send_response(client_socket, {'status': 'success', 'size': file_size, 'filename': filename, 'md5': md5_hash.hexdigest()})
+            self.send_response(client_socket, {
+                'status': 'success',
+                'size': file_size,
+                'filename': filename,
+                'md5': md5_hash.hexdigest()
+            })
 
             response = self.receive_response(client_socket)
             if not response or response.get('status') != 'ready':
-                print("Клиент не подтвердил готовность к приему файла")
+                logging.error("Клиент не подтвердил готовность к приему файла")
                 return
 
+            sent_total = 0
             with open(filepath, 'rb') as f:
                 while True:
-                    chunk = f.read(self.chunk_size)
+                    chunk = f.read(self.CHUNK_SIZE)
                     if not chunk:
                         break
 
@@ -138,13 +234,19 @@ class FileServer:
                         client_socket.sendall(struct.pack('>I', len(chunk)))
                         client_socket.sendall(chunk)
                     except (ConnectionError, BrokenPipeError):
-                        print("Соединение разорвано при отправке файла")
+                        logging.error("Соединение разорвано при отправке файла")
                         return
 
-            print(f"Файл {filename} отправлен клиенту ({file_size} байт)")
+                    sent_total += len(chunk)
+
+                    if sent_total % (10 * 1024 * 1024) < self.CHUNK_SIZE:
+                        percent = (sent_total / file_size) * 100
+                        logging.info(f"Отправка {filename}: {percent:.1f}% ({sent_total}/{file_size} байт)")
+
+            logging.info(f"Файл {filename} отправлен клиенту ({file_size} байт)")
 
         except Exception as e:
-            print(f"Ошибка отправки файла: {e}")
+            logging.error(f"Ошибка отправки файла: {e}", exc_info=True)
             try:
                 self.send_response(client_socket, {'status': 'error', 'message': str(e)})
             except:
@@ -180,8 +282,12 @@ class FileServer:
                         f.write(chunk)
                         received += len(chunk)
 
+                        if received % (10 * 1024 * 1024) < self.CHUNK_SIZE:
+                            percent = (received / file_size) * 100
+                            logging.info(f"Прием {filename}: {percent:.1f}% ({received}/{file_size} байт)")
+
                     except (ConnectionError, socket.timeout, struct.error) as e:
-                        print(f"Ошибка приема чанка: {e}")
+                        logging.error(f"Ошибка приема чанка: {e}")
                         raise
 
             if received == file_size:
@@ -190,12 +296,19 @@ class FileServer:
                     for chunk in iter(lambda: f.read(8192), b''):
                         md5_hash.update(chunk)
 
-                self.send_response(client_socket, {'status': 'success', 'message': 'Файл загружен', 'md5': md5_hash.hexdigest()})
-                print(f"Файл {filename} успешно загружен ({file_size} байт)")
+                self.send_response(client_socket, {
+                    'status': 'success',
+                    'message': 'Файл загружен',
+                    'md5': md5_hash.hexdigest()
+                })
+                logging.info(f"Файл {filename} успешно загружен на сервер ({file_size} байт)")
             else:
                 if filepath.exists():
                     os.remove(filepath)
-                self.send_response(client_socket, {'status': 'error', 'message': f'Неполная загрузка файла: получено {received} из {file_size} байт'})
+                self.send_response(client_socket, {
+                    'status': 'error',
+                    'message': f'Неполная загрузка файла: получено {received} из {file_size} байт'
+                })
 
         except Exception as e:
             filename = command['filename']
@@ -205,13 +318,17 @@ class FileServer:
                     os.remove(filepath)
                 except:
                     pass
-            print(f"Ошибка приема файла: {e}")
+            logging.error(f"Ошибка приема файла: {e}", exc_info=True)
             try:
                 self.send_response(client_socket, {'status': 'error', 'message': str(e)})
             except:
                 pass
 
     def delete_file(self, client_socket, command):
+        if not self.can_clients_delete_files:
+            self.send_response(client_socket, {'status': 'error', 'message': 'Недостаточно прав'})
+            return
+
         try:
             filename = command['filename']
             filepath = self.upload_dir / filename
@@ -219,7 +336,7 @@ class FileServer:
             if filepath.exists():
                 filepath.unlink()
                 self.send_response(client_socket, {'status': 'success', 'message': 'Файл удален'})
-                print(f"Файл {filename} удалён с сервера")
+                logging.info(f"Файл {filename} удалён с сервера")
             else:
                 self.send_response(client_socket, {'status': 'error', 'message': 'Файл не найден'})
         except Exception as e:
@@ -234,7 +351,14 @@ class FileServer:
                     total_files += 1
                     total_size += f.stat().st_size
 
-            info = {'status': 'success', 'info': {'upload_dir': str(self.upload_dir.absolute()), 'total_files': total_files, 'total_size': total_size}}
+            info = {
+                'status': 'success',
+                'info': {
+                    'upload_dir': str(self.upload_dir.absolute()),
+                    'total_files': total_files,
+                    'total_size': total_size
+                }
+            }
             self.send_response(client_socket, info)
         except Exception as e:
             self.send_response(client_socket, {'status': 'error', 'message': str(e)})
@@ -274,9 +398,5 @@ class FileServer:
 
 
 if __name__ == "__main__":
-    SERVER_HOST = '0.0.0.0'
-    SERVER_PORT = int(input("Введите порт для открытия сервера: "))
-    UPLOAD_DIR = 'server_files'
-
-    server = FileServer(SERVER_HOST, SERVER_PORT, UPLOAD_DIR)
+    server = FileServer()
     server.start()

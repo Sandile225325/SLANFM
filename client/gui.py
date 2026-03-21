@@ -15,22 +15,22 @@ class FileManagerGUI:
         self.root = root
         self.root.title("SLANFM")
         self.root.geometry("850x600")
-
         self.root.minsize(800, 550)
 
         self.client = None
         self.server_files = []
         self.progress_queue = queue.Queue()
+        self.user_response_queue = queue.Queue()
         self.current_operation = None
         self.operation_in_progress = False
+        self.connect_operation = False
+        self.connected = False
 
         self.config_file = "config.json"
         self.config = self.load_config(self.config_file)
 
         self.sort_reverse = True
         self.sort_column = 'modified'
-
-        self.max_file_size = 2 * 1024 * 1024 * 1024
 
         self.progress_var = tk.DoubleVar()
         self.progress_var.set(0)
@@ -45,6 +45,9 @@ class FileManagerGUI:
 
         self.files_tree.bind('<<TreeviewSelect>>', self.on_file_selection_changed)
 
+        self.total_size = 0
+        self.total_number = 0
+
     def start_progress_monitor(self):
         self.check_progress_queue()
         self.root.after(100, self.start_progress_monitor)
@@ -58,6 +61,20 @@ class FileManagerGUI:
                         self.progress_var.set(message['percent'])
                     if 'status' in message:
                         self.status_text.set(message['status'])
+                    if 'ask_overwrite' in message:
+                        filename = message['ask_overwrite']
+                        answer = messagebox.askyesno(
+                            "Файл существует",
+                            f'Файл "{filename}" уже существует на сервере.\nПерезаписать?'
+                        )
+                        self.user_response_queue.put('yes' if answer else 'no')
+                    if 'ask_overwrite_local' in message:
+                        filepath = message['ask_overwrite_local']
+                        answer = messagebox.askyesno(
+                            "Файл существует",
+                            f'Локальный файл "{filepath}" уже существует.\nПерезаписать?'
+                        )
+                        self.user_response_queue.put('yes' if answer else 'no')
                 elif isinstance(message, str):
                     self.status_text.set(message)
         except queue.Empty:
@@ -69,10 +86,10 @@ class FileManagerGUI:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"server_config": {"PORT": "6666"}}
+            return {"hostsandips": {}, "serverconfig": {"PORT": "6666"}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"server_config": {"PORT": "6666"}}
+            return {"hostsandips": {}, "serverconfig": {"PORT": "6666"}}
 
     def create_widgets(self):
         connect_frame = ttk.LabelFrame(self.root, text="Подключение к серверу", padding=10)
@@ -80,11 +97,12 @@ class FileManagerGUI:
 
         ttk.Label(connect_frame, text="IP сервера:").grid(row=0, column=0, padx=5)
         self.server_ip = ttk.Entry(connect_frame, width=20)
-        self.server_ip.insert(0, "")
         self.server_ip.grid(row=0, column=1, padx=5)
 
-        ttk.Button(connect_frame, text="Подключиться", command=self.connect_server).grid(row=0, column=2, padx=5)
-        ttk.Button(connect_frame, text="Отключиться", command=self.disconnect_server).grid(row=0, column=3, padx=5)
+        ttk.Button(connect_frame, text="Подключиться",
+                   command=self.connect_server).grid(row=0, column=2, padx=5)
+        ttk.Button(connect_frame, text="Отключиться",
+                   command=self.disconnect_server).grid(row=0, column=3, padx=5)
 
         files_frame = ttk.LabelFrame(self.root, text="Файлы на сервере", padding=10)
         files_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -109,15 +127,22 @@ class FileManagerGUI:
         button_frame = ttk.Frame(self.root)
         button_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Button(button_frame, text="Обновить список", command=self.refresh_files).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Загрузить на сервер", command=self.upload_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Скачать с сервера", command=self.download_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Удалить с сервера", command=self.delete_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Обновить список",
+                   command=self.refresh_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Загрузить на сервер",
+                   command=self.upload_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Скачать с сервера",
+                   command=self.download_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Удалить с сервера",
+                   command=self.delete_file).pack(side=tk.LEFT, padx=5)
 
         progress_frame = ttk.Frame(self.root)
         progress_frame.pack(fill="x", padx=10, pady=1)
 
-        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100, mode='determinate')
+        self.progress_bar = ttk.Progressbar(progress_frame,
+                                            variable=self.progress_var,
+                                            maximum=100,
+                                            mode='determinate')
         self.progress_bar.pack(fill="x", pady=5)
 
         self.status_var = tk.StringVar()
@@ -129,11 +154,18 @@ class FileManagerGUI:
             img = Image.open('icon.png')
             photo = ImageTk.PhotoImage(img)
             root.iconphoto(False, photo)
-        except:
+        except Exception:
             try:
                 root.iconbitmap('icon.ico')
             except:
                 pass
+
+        self.server_ip.bind('<Control-c>', self.copy_to_clipboard)
+        self.server_ip.bind('<Control-v>', self.paste_from_clipboard)
+        self.server_ip.bind('<Control-x>', self.cut_to_clipboard)
+
+        self.server_ip.bind('<Return>', self.connect_server_keyboard)
+        self.server_ip.bind('<KP_Enter>', self.connect_server_keyboard)
 
     def sort_treeview(self, column, reverse=None):
         if reverse is None:
@@ -182,64 +214,79 @@ class FileManagerGUI:
                 heading['text'] = text
 
     def connect_server(self):
-        self.status_var.set("Не подключено")
         if self.operation_in_progress:
             messagebox.showwarning("Внимание", "Дождитесь завершения текущей операции")
             return
 
         user_input = self.server_ip.get().strip()
-
         ip = user_input
-        if not ip:
-            return
 
-        server_config = self.config.get("server_config", {})
-        port_str = server_config.get("PORT", "6666")
+        port_str = self.config.get("serverconfig", {}).get("PORT", "6666")
         try:
             port = int(port_str)
         except ValueError:
-            port = 6666
+            messagebox.showwarning("Внимание", f"Некорректный порт в конфигурации: {port_str}")
+            return
 
         self.client = FileClient(ip, port)
 
         def connect_thread():
             self.operation_in_progress = True
+            self.connect_operation = True
+            success = False
             try:
                 self.progress_queue.put({'status': f'Подключение к {ip}:{port}...'})
 
                 if self.client.connect():
-                    self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
-
-                    self.refresh_files()
+                    self.progress_queue.put({'status': f'Подключено к {ip}:{port} ({user_input})'})
 
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
-                    self.status_var.set(f"Подключено к {ip}:{port}")
+                    self.status_var.set(f"Подключено к {ip}:{port} ({user_input})")
+                    success = True
+                    self.connected = True
                 else:
                     self.progress_queue.put({'status': 'Ошибка подключения'})
                     self.client = None
+                    messagebox.showerror("Ошибка", "Ошибка подключения")
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.client = None
+                messagebox.showerror("Ошибка", f"Ошибка: {error_msg}")
             finally:
                 self.operation_in_progress = False
+                self.connect_operation = False
+                if success:
+                    self.root.after(0, self.refresh_files(True))
 
         threading.Thread(target=connect_thread, daemon=True).start()
 
     def disconnect_server(self):
+        if self.operation_in_progress:
+            messagebox.showwarning("Внимание", "Дождитесь завершения текущей операции")
+            return
+
         if self.client:
             self.client.disconnect()
             self.client = None
             self.status_text.set("Отключено")
             self.status_var.set("Отключено")
             self.clear_files_list()
+            self.total_size = 0
+            self.total_number = 0
+            self.connected = False
 
-    def refresh_files(self):
+    def refresh_files(self, dont_reset_progress=False):
         if not self.client:
             messagebox.showwarning("Предупреждение", "Сначала подключитесь к серверу")
             return
 
+        if self.operation_in_progress:
+            messagebox.showwarning("Внимание", "Дождитесь завершения текущей операции")
+            return
+
         def refresh_thread():
+            self.operation_in_progress = True
             try:
                 self.progress_queue.put({'status': 'Получение списка файлов...'})
 
@@ -250,6 +297,10 @@ class FileManagerGUI:
                     self.server_files = response.get('files', [])
                     self.root.after(0, self.update_files_list)
                     self.progress_queue.put({'status': 'Список файлов обновлен'})
+                    self.total_size = 0
+                    self.total_number = 0
+                    if not dont_reset_progress:
+                        self.reset_progress(immediate=True)
                 else:
                     error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
                     self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
@@ -258,12 +309,17 @@ class FileManagerGUI:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка при получении списка файлов: {msg}"))
+            finally:
+                self.operation_in_progress = False
 
         threading.Thread(target=refresh_thread, daemon=True).start()
 
     def update_files_list(self):
         for item in self.files_tree.get_children():
             self.files_tree.delete(item)
+
+        self.total_number = 0
+        self.total_size = 0
 
         for file in self.server_files:
             modified_value = file.get('modified', '')
@@ -283,6 +339,9 @@ class FileManagerGUI:
             size_mb = file['size'] / (1024 * 1024)
             self.files_tree.insert('', tk.END,
                                    values=(file['name'], f"{size_mb:.2f} MB", modified_str))
+
+            self.total_number += 1
+            self.total_size += size_mb
 
         self.sort_treeview(self.sort_column, self.sort_reverse)
 
@@ -305,19 +364,37 @@ class FileManagerGUI:
 
         try:
             file_size = os.path.getsize(filepath)
-            if file_size > self.max_file_size:
-                messagebox.showerror("Ошибка", f"Файл слишком большой (максимум {self.max_file_size / (1024 * 1024 * 1024):.1f} ГБ)")
+            if file_size > self.client.max_file_size:
+                messagebox.showerror("Ошибка", f"Файл слишком большой")
                 return
         except Exception as e:
-            error_msg = str(e)
-            messagebox.showerror("Ошибка", f"Не удалось проверить размер файла: {error_msg}")
+            messagebox.showerror("Ошибка", f"Не удалось проверить размер файла: {e}")
             return
 
         def upload_thread():
             self.operation_in_progress = True
+            operation_success = False
             try:
-                self.progress_queue.put({'status': f'Загрузка файла {os.path.basename(filepath)}...'})
-                self.progress_queue.put({'percent': 0})
+                self.progress_queue.put({'status': 'Проверка наличия файла на сервере...'})
+                self.client.send_command({'command': 'list'})
+                response = self.client.receive_response()
+                if response and response.get('status') == 'success':
+                    server_files = response.get('files', [])
+                    filename = os.path.basename(filepath)
+                    file_exists = any(f['name'] == filename for f in server_files)
+                    if file_exists:
+                        self.progress_queue.put({'ask_overwrite': filename})
+                        answer = self.user_response_queue.get()
+                        if answer != 'yes':
+                            self.progress_queue.put({'status': 'Загрузка отменена'})
+                            return
+                else:
+                    error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
+                    self.progress_queue.put({'status': f'Ошибка получения списка файлов: {error_msg}'})
+                    self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Не удалось проверить наличие файла: {error_msg}"))
+                    return
+
+                self.progress_queue.put({'status': f'Загрузка файла {os.path.basename(filepath)}...', 'percent': 0})
 
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Загрузка: {percent:.1f}%'})
@@ -325,22 +402,20 @@ class FileManagerGUI:
                 success = self.client.upload_file(filepath, update_progress)
 
                 if success:
-                    self.progress_queue.put({'percent': 100})
-                    self.progress_queue.put({'status': 'Файл успешно загружен'})
-
-                    self.root.after(0, lambda: self.refresh_files())
-
+                    self.progress_queue.put({'percent': 100, 'status': 'Файл успешно загружен'})
                     self.root.after(0, lambda: messagebox.showinfo("Успех", "Файл успешно загружен на сервер"))
+                    operation_success = True
                 else:
                     self.progress_queue.put({'status': 'Ошибка загрузки файла'})
                     self.root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось загрузить файл на сервер"))
-
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка загрузки: {msg}"))
             finally:
                 self.operation_in_progress = False
+                if operation_success:
+                    self.root.after(0, self.refresh_files(True))
 
         threading.Thread(target=upload_thread, daemon=True).start()
 
@@ -361,13 +436,21 @@ class FileManagerGUI:
         item = self.files_tree.item(selected[0])
         filename = item['values'][0]
 
-        save_path = self.download_dir / filename
-
         def download_thread():
             self.operation_in_progress = True
+            operation_success = False
             try:
-                self.progress_queue.put({'status': f'Скачивание файла {filename}...'})
-                self.progress_queue.put({'percent': 0})
+                filename = item['values'][0]
+                save_path = self.download_dir / filename
+
+                if save_path.exists():
+                    self.progress_queue.put({'ask_overwrite_local': str(save_path)})
+                    answer = self.user_response_queue.get()
+                    if answer != 'yes':
+                        self.progress_queue.put({'status': 'Скачивание отменено'})
+                        return
+
+                self.progress_queue.put({'status': f'Скачивание файла {filename}...', 'percent': 0})
 
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Скачивание: {percent:.1f}%'})
@@ -375,27 +458,33 @@ class FileManagerGUI:
                 success = self.client.download_file(filename, save_path, update_progress)
 
                 if success:
-                    self.progress_queue.put({'percent': 100})
-                    self.progress_queue.put({'status': 'Файл успешно скачан'})
-
-                    self.root.after(0, lambda f=filename, d=str(self.download_dir): messagebox.showinfo("Успех", f"Файл {f} успешно скачан в папку {d}"))
+                    self.progress_queue.put({'percent': 100, 'status': 'Файл успешно скачан'})
+                    self.root.after(0, lambda f=filename, d=str(self.download_dir):
+                    messagebox.showinfo("Успех", f"Файл {f} успешно скачан в папку {d}"))
+                    operation_success = True
                 else:
                     self.progress_queue.put({'status': 'Ошибка скачивания файла'})
-                    self.root.after(0, lambda f=filename: messagebox.showerror("Ошибка", f"Не удалось скачать файл {f}"))
-
+                    self.root.after(0, lambda f=filename:
+                    messagebox.showerror("Ошибка", f"Не удалось скачать файл {f}"))
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
-                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка скачивания: {msg}"))
-
+                self.root.after(0, lambda msg=error_msg:
+                messagebox.showerror("Ошибка", f"Ошибка скачивания: {msg}"))
             finally:
                 self.operation_in_progress = False
+                if operation_success:
+                    self.root.after(0, self.refresh_files(True))
 
         threading.Thread(target=download_thread, daemon=True).start()
 
     def delete_file(self):
         if not self.client:
             messagebox.showwarning("Предупреждение", "Сначала подключитесь к серверу")
+            return
+
+        if self.operation_in_progress:
+            messagebox.showwarning("Внимание", "Дождитесь завершения текущей операции")
             return
 
         selected = self.files_tree.selection()
@@ -410,35 +499,87 @@ class FileManagerGUI:
             return
 
         def delete_thread():
+            self.operation_in_progress = True
+            operation_success = False
             try:
                 self.progress_queue.put({'status': f'Удаление файла {filename}...'})
 
-                self.client.delete_file(filename)
+                delete_result = self.client.delete_file(filename)
 
-                self.progress_queue.put({'status': 'Файл успешно удален'})
+                if isinstance(delete_result, str):
+                    self.progress_queue.put({'status': f'Ошибка: {delete_result}'})
+                    msg = delete_result + ". Хост сервера запретил удалять файлы" if delete_result == "Недостаточно прав" else delete_result
+                    self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Ошибка удаления: {msg}"))
 
-                self.root.after(0, lambda: self.refresh_files())
+                else:
+                    self.progress_queue.put({'status': 'Файл успешно удален'})
+                    self.root.after(0, lambda: messagebox.showinfo("Успех", "Файл успешно удален с сервера"))
+                    operation_success = True
 
-                self.root.after(0, lambda: messagebox.showinfo("Успех", "Файл успешно удален с сервера"))
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
-                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка удаления: {msg}"))
+                self.root.after(0, lambda msg=error_msg:
+                messagebox.showerror("Ошибка", f"Ошибка удаления: {msg}"))
+            finally:
+                self.operation_in_progress = False
+                if operation_success:
+                    self.root.after(0, self.refresh_files(True))
 
         threading.Thread(target=delete_thread, daemon=True).start()
 
     def reset_progress(self, immediate=False):
         if immediate:
             self.progress_var.set(0)
+            self.status_text.set("Готово")
         else:
             self.root.after(500, self._delayed_reset_progress)
+
+    def save_host(self, host_str):
+        if self.config.get("saveconfig", {}).get("sh", True):
+            try:
+                with open(self.hostfill_file, 'w', encoding='utf-8') as f:
+                    f.write(host_str)
+            except Exception:
+                return
 
     def _delayed_reset_progress(self):
         if not self.operation_in_progress and self.progress_var.get() == 0:
             self.progress_var.set(0)
+            self.status_text.set("Готово")
+
+    def copy_to_clipboard(self, event):
+        try:
+            selected_text = self.server_ip.selection_get()
+        except tk.TclError:
+            return "break"
+        self.root.clipboard_clear()
+        self.root.clipboard_append(selected_text)
+        return "break"
+
+    def paste_from_clipboard(self, event):
+        try:
+            clipboard_text = self.root.clipboard_get()
+        except tk.TclError:
+            return "break"
+        self.server_ip.insert(tk.INSERT, clipboard_text)
+        return "break"
+
+    def cut_to_clipboard(self, event):
+        try:
+            selected_text = self.server_ip.selection_get()
+        except tk.TclError:
+            return "break"
+        self.root.clipboard_clear()
+        self.root.clipboard_append(selected_text)
+        self.server_ip.delete(tk.SEL_FIRST, tk.SEL_LAST)
+        return "break"
 
     def on_file_selection_changed(self, event):
         self.reset_progress(immediate=True)
+
+    def connect_server_keyboard(self, event):
+        self.connect_server()
 
 
 if __name__ == "__main__":

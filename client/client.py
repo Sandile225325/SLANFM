@@ -7,13 +7,14 @@ import struct
 
 
 class FileClient:
-    def __init__(self, server_host, server_port):
+    def __init__(self, server_host=None, server_port=None):
         self.server_host = server_host
         self.server_port = server_port
         self.socket = None
         self.download_dir = Path('downloads')
         self.download_dir.mkdir(exist_ok=True)
         self.chunk_size = 65536
+        self.max_file_size = 2 * 1024 * 1024 * 1024
         self.timeout = 120
 
     def connect(self):
@@ -22,6 +23,18 @@ class FileClient:
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.socket.settimeout(self.timeout)
             self.socket.connect((self.server_host, self.server_port))
+
+            init_response = self.receive_response()
+            if init_response and init_response.get('type') == 'init':
+                if 'chunk_size' in init_response:
+                    self.chunk_size = init_response['chunk_size']
+                if 'max_file_size' in init_response:
+                    self.max_file_size = init_response['max_file_size']
+                if 'timeout' in init_response:
+                    self.timeout = init_response['timeout']
+                    self.socket.settimeout(self.timeout)
+            else:
+                pass
             return True
         except Exception:
             return False
@@ -30,11 +43,15 @@ class FileClient:
         if not save_path:
             save_path = self.download_dir / filename
 
-        self.send_command({'command': 'download', 'filename': filename})
+        self.send_command({
+            'command': 'download',
+            'filename': filename
+        })
 
         response = self.receive_response()
 
         if not response or response.get('status') != 'success':
+            error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
             return False
 
         file_size = response['size']
@@ -89,7 +106,6 @@ class FileClient:
                         os.remove(save_path)
                     return False
             return True
-
         else:
             if os.path.exists(save_path):
                 os.remove(save_path)
@@ -103,13 +119,20 @@ class FileClient:
 
         file_size = path.stat().st_size
 
+        if file_size > self.max_file_size:
+            return False
+
         md5_hash = hashlib.md5()
         with open(path, 'rb') as f:
             for chunk in iter(lambda: f.read(8192), b''):
                 md5_hash.update(chunk)
         original_md5 = md5_hash.hexdigest()
 
-        self.send_command({'command': 'upload', 'filename': path.name, 'size': file_size})
+        self.send_command({
+            'command': 'upload',
+            'filename': path.name,
+            'size': file_size
+        })
 
         response = self.receive_response()
 
@@ -129,7 +152,7 @@ class FileClient:
                     try:
                         self.socket.sendall(struct.pack('>I', chunk_size))
                         self.socket.sendall(chunk)
-                    except (ConnectionError, BrokenPipeError):
+                    except (ConnectionError, BrokenPipeError) as e:
                         return False
 
                     uploaded += len(chunk)
@@ -151,9 +174,10 @@ class FileClient:
                 else:
                     return False
             else:
+                error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
                 return False
-
         else:
+            error_msg = response.get('message', 'Неизвестная ошибка')
             return False
 
     def disconnect(self):
@@ -206,19 +230,26 @@ class FileClient:
                 return None
 
             return json.loads(json_data.decode('utf-8'))
-
         except Exception:
             return None
 
     def list_files(self):
         self.send_command({'command': 'list'})
+        response = self.receive_response()
 
     def delete_file(self, filename):
-        self.send_command({'command': 'delete', 'filename': filename})
+        self.send_command({
+            'command': 'delete',
+            'filename': filename
+        })
 
+        response = self.receive_response()
+        if response and response.get('status') == 'success':
+            return True
+        else:
+            error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
+            return error_msg
 
-if __name__ == "__main__":
-    SERVER_HOST = "0.0.0.0"
-    SERVER_PORT = 6666
-
-    client = FileClient(SERVER_HOST, SERVER_PORT)
+    def get_server_info(self):
+        self.send_command({'command': 'info'})
+        response = self.receive_response()

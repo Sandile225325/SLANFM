@@ -1,5 +1,5 @@
 {
-  "server_config": {
+  "serverconfig": {
     "PORT": "6666"
   }
 }
