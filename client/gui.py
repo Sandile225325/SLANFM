@@ -86,10 +86,10 @@ class FileManagerGUI:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"server_config": {"PORT": "6666"}}
+            return {"connect_config": {"PORT": "6666"}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"server_config": {"PORT": "6666"}}
+            return {"connect_config": {"PORT": "6666"}}
 
     def create_widgets(self):
         connect_frame = ttk.LabelFrame(self.root, text="Подключение к серверу", padding=10)
@@ -237,22 +237,32 @@ class FileManagerGUI:
             try:
                 self.progress_queue.put({'status': f'Подключение к {ip}:{port}...'})
 
-                if self.client.connect():
+                connect_result = self.client.connect()
+
+                if connect_result is True:
                     self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
 
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                     self.status_var.set(f"Подключено к {ip}:{port}")
                     success = True
                     self.connected = True
+
+                elif isinstance(connect_result, str):
+                    self.progress_queue.put({'status': 'Ошибка подключения'})
+                    self.client = None
+                    messagebox.showerror("Ошибка", connect_result)
+
                 else:
                     self.progress_queue.put({'status': 'Ошибка подключения'})
                     self.client = None
                     messagebox.showerror("Ошибка", "Ошибка подключения")
+
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.client = None
                 messagebox.showerror("Ошибка", f"Ошибка: {error_msg}")
+
             finally:
                 self.operation_in_progress = False
                 self.connect_operation = False
@@ -534,14 +544,6 @@ class FileManagerGUI:
             self.status_text.set("Готово")
         else:
             self.root.after(500, self._delayed_reset_progress)
-
-    def save_host(self, host_str):
-        if self.config.get("saveconfig", {}).get("sh", True):
-            try:
-                with open(self.hostfill_file, 'w', encoding='utf-8') as f:
-                    f.write(host_str)
-            except Exception:
-                return
 
     def _delayed_reset_progress(self):
         if not self.operation_in_progress and self.progress_var.get() == 0:

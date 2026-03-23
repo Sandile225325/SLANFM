@@ -20,7 +20,7 @@ class FileServer:
         self.lock = threading.Lock()
         self.server = None
         self.max_file_size = 2 * 1024 * 1024 * 1024
-        self.CHUNK_SIZE = 65536
+        self.chunk_size = 65536
         self.timeout = 120
         self.can_clients_delete_files = True
 
@@ -38,7 +38,11 @@ class FileServer:
                 config = json.load(f)
 
             if 'host' in config:
-                self.host = config['host']
+                new_host = config['host']
+                if isinstance(new_host, str) and new_host.strip() != "":
+                    self.host = new_host
+                else:
+                    logging.warning(f"Некорректный хост в конфиге: {new_host}. Используется значение {self.host}")
 
             if 'port' in config:
                 new_port = config['port']
@@ -48,8 +52,19 @@ class FileServer:
                     logging.warning(f"Некорректный порт в конфиге: {new_port}. Используется значение {self.port}")
 
             if 'upload_dir' in config:
-                self.upload_dir = Path(config['upload_dir'])
-                self.upload_dir.mkdir(exist_ok=True)
+                base_dir = Path.cwd()
+                try:
+                    configured_path = Path(config['upload_dir'])
+                    if not configured_path.is_absolute():
+                        configured_path = base_dir / configured_path
+                    resolved_path = configured_path.resolve()
+                    if base_dir.resolve() in resolved_path.parents or resolved_path == base_dir.resolve():
+                        self.upload_dir = resolved_path
+                        self.upload_dir.mkdir(exist_ok=True)
+                    else:
+                        logging.error(f"Ошибка при настройке загрузочной папки. Используется {self.upload_dir}")
+                except Exception:
+                    logging.error(f"Ошибка при настройке загрузочной папки. Используется {self.upload_dir}")
 
             if 'max_file_size' in config:
                 new_max_size = config['max_file_size']
@@ -63,7 +78,7 @@ class FileServer:
                 if isinstance(new_chunk, int) and new_chunk > 0:
                     self.chunk_size = new_chunk
                 else:
-                    logging.warning(f"Некорректный chunk_size в конфиге: {new_chunk}. Используется значение {self.CHUNK_SIZE}")
+                    logging.warning(f"Некорректный chunk_size в конфиге: {new_chunk}. Используется значение {self.chunk_size}")
 
             if 'timeout' in config:
                 new_timeout = config['timeout']
@@ -124,6 +139,13 @@ class FileServer:
             return True
         except OSError as e:
             logging.warning(f"Порт {self.port} недоступен.")
+            return False
+        
+    def is_safe_path(self, filename):
+        try:
+            requested_path = (self.upload_dir / filename).resolve()
+            return self.upload_dir.resolve() in requested_path.parents or requested_path == self.upload_dir.resolve()
+        except Exception:
             return False
 
     def handle_client(self, client_socket, address):
@@ -199,6 +221,9 @@ class FileServer:
     def send_file(self, client_socket, command):
         try:
             filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
             filepath = self.upload_dir / filename
 
             if not filepath.exists():
@@ -256,6 +281,9 @@ class FileServer:
     def receive_file(self, client_socket, command):
         try:
             filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
             file_size = int(command['size'])
 
             if file_size > self.max_file_size:
@@ -332,6 +360,9 @@ class FileServer:
 
         try:
             filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
             filepath = self.upload_dir / filename
 
             if filepath.exists():

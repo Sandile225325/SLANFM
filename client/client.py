@@ -16,6 +16,8 @@ class FileClient:
         self.chunk_size = 65536
         self.max_file_size = 2 * 1024 * 1024 * 1024
         self.timeout = 120
+        self.config_file = "config.json"
+        self.config = self.load_config(self.config_file)
 
     def connect(self):
         try:
@@ -26,18 +28,48 @@ class FileClient:
 
             init_response = self.receive_response()
             if init_response and init_response.get('type') == 'init':
-                if 'chunk_size' in init_response:
-                    self.chunk_size = init_response['chunk_size']
-                if 'max_file_size' in init_response:
-                    self.max_file_size = init_response['max_file_size']
-                if 'timeout' in init_response:
-                    self.timeout = init_response['timeout']
-                    self.socket.settimeout(self.timeout)
+                cfg = getattr(self, 'config', {}).get('values_config', {})
+                chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
+                timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
+
+                chunk_size = init_response['chunk_size']
+                max_file_size = init_response['max_file_size']
+                timeout = init_response['timeout']
+
+                if not (chunk_min <= chunk_size <= chunk_max):
+                    self.socket.close()
+                    return "В установленный промежуток размера чанка не входит размер чанка установленный на сервере"
+                if not (timeout_min <= timeout <= timeout_max):
+                    self.socket.close()
+                    return "В установленный промежуток таймаута не входит таймаут установленный на сервере"
+
+                self.chunk_size = chunk_size
+                self.max_file_size = max_file_size
+                self.timeout = timeout
+                self.socket.settimeout(self.timeout)
             else:
-                pass
+                self.socket.close()
+                return False
+
             return True
+
         except Exception:
             return False
+
+    def load_config(self, file):
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {"values_config": {
+                "chunk_size_range": [1024, 10485760],
+                "timeout_range": [1, 300]
+            }}
+        except json.JSONDecodeError:
+            return {"values_config": {
+                "chunk_size_range": [1024, 10485760],
+                "timeout_range": [1, 300]
+              }}
 
     def download_file(self, filename, save_path=None, progress_callback=None):
         if not save_path:
