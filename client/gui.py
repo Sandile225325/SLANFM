@@ -8,7 +8,6 @@ import time
 import json
 import queue
 from pathlib import Path
-import sys
 
 
 class FileManagerGUI:
@@ -81,16 +80,9 @@ class FileManagerGUI:
         except queue.Empty:
             pass
 
-    def resource_path(relative_path):
-        try:
-            base_path = Path(sys._MEIPASS)
-        except AttributeError:
-            base_path = Path(__file__).parent
-        return base_path / relative_path
-
     def load_config(self, file):
         try:
-            with open(self.resource_path(file), 'r', encoding='utf-8') as f:
+            with open(file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
@@ -159,12 +151,12 @@ class FileManagerGUI:
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         try:
-            img = Image.open(self.resource_path('icon.png'))
+            img = Image.open('icon.png')
             photo = ImageTk.PhotoImage(img)
             root.iconphoto(False, photo)
         except Exception:
             try:
-                root.iconbitmap(self.resource_path('icon.ico'))
+                root.iconbitmap('icon.ico')
             except:
                 pass
 

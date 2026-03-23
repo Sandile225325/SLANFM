@@ -4,7 +4,6 @@ import os
 import hashlib
 from pathlib import Path
 import struct
-import sys
 
 
 class FileClient:
@@ -56,17 +55,10 @@ class FileClient:
 
         except Exception:
             return False
-        
-    def resource_path(relative_path):
-        try:
-            base_path = Path(sys._MEIPASS)
-        except AttributeError:
-            base_path = Path(__file__).parent
-        return base_path / relative_path
 
     def load_config(self, file):
         try:
-            with open(self.resource_path(file), 'r', encoding='utf-8') as f:
+            with open(file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             return {"values_config": {
