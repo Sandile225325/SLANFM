@@ -22,6 +22,7 @@ jobs:
           pip install pyinstaller Pillow
 
       - name: Build SLANFM-client-windows
+        shell: cmd
         run: |
           pyinstaller --onefile --noconsole ^
             --icon=client/icon.ico ^
@@ -32,6 +33,7 @@ jobs:
             client/gui.py
 
       - name: Build SLANFM-server-windows
+        shell: cmd
         run: |
           pyinstaller --onefile --console ^
             --icon=server/icon.ico ^
