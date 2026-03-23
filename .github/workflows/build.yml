@@ -1,0 +1,56 @@
+name: SLANFM
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.5'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller Pillow
+
+      - name: Build SLANFM-client-windows
+        run: |
+          pyinstaller --onefile --noconsole ^
+            --icon=client/icon.ico ^
+            --add-data "client/config.json;." ^
+            --add-data "client/icon.png;." ^
+            --add-data "client/icon.ico;." ^
+            --name "SLANFM-client-windows" ^
+            client/gui.py
+
+      - name: Build SLANFM-server-windows
+        run: |
+          pyinstaller --onefile --console ^
+            --icon=server/icon.ico ^
+            --add-data "server/server_config.json;." ^
+            --name "SLANFM-server-windows" ^
+            server/server.py
+
+      - name: List dist directory
+        run: dir dist
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SLANFM-client-windows.exe
+            dist/SLANFM-server-windows.exe
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
