@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 import logging
 import struct
+import sys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -27,13 +28,22 @@ class FileServer:
         if config_path:
             self.load_config(config_path)
 
+    def resource_path(relative_path):
+        try:
+            base_path = Path(sys._MEIPASS)
+        except AttributeError:
+            base_path = Path(__file__).parent
+        return base_path / relative_path
+
     def load_config(self, config_path):
         try:
             config_file = Path(config_path)
             if not config_file.is_file():
-                logging.warning(f"Файл конфигурации {config_path} не найден. Используются значения по умолчанию.")
-                return
-
+                config_file = self.resource_path(config_path)
+                if not config_file.is_file():
+                    logging.warning(f"Файл конфигурации {config_path} не найден. Используются значения по умолчанию.")
+                    return
+                
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
