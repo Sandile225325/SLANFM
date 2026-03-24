@@ -43,26 +43,48 @@ jobs:
             --name "SLANFM-server-windows" ^
             server/server.py
 
-      - name: List dist directory
-        run: dir dist
-
-      - name: Prepare client package
+      - name: Create client installer script
         shell: pwsh
         run: |
+          @"
+          @echo off
+          echo Creating SLANFM configuration directory...
+          if not exist "%APPDATA%\SLANFM" mkdir "%APPDATA%\SLANFM"
+          if not exist "%APPDATA%\SLANFM\config.json" (
+              echo Copying default configuration...
+              copy "%~dp0config.json" "%APPDATA%\SLANFM\config.json"
+          )
+          echo Starting SLANFM Client...
+          start "" "%~dp0SLANFM-client-windows.exe"
+          "@ | Out-File -FilePath "client-package/start_client.bat" -Encoding ASCII
+          
           New-Item -ItemType Directory -Path "client-package" -Force
           Copy-Item "dist/SLANFM-client-windows.exe" "client-package/"
           Copy-Item "client/icon.png" "client-package/"
           Copy-Item "client/icon.ico" "client-package/"
           Copy-Item "client/config.json" "client-package/"
+          Copy-Item "client-package/start_client.bat" "client-package/"
+          
           Compress-Archive -Path "client-package/*" -DestinationPath "dist/SLANFM-client-windows.zip" -Force
 
-      - name: Prepare server package
+      - name: Create server installer script
         shell: pwsh
         run: |
+          @"
+          @echo off
+          echo Starting SLANFM Server...
+          start "" "%~dp0SLANFM-server-windows.exe"
+          "@ | Out-File -FilePath "server-package/start_server.bat" -Encoding ASCII
+          
           New-Item -ItemType Directory -Path "server-package" -Force
           Copy-Item "dist/SLANFM-server-windows.exe" "server-package/"
           Copy-Item "server/server_config.json" "server-package/"
+          Copy-Item "server-package/start_server.bat" "server-package/"
+          
           Compress-Archive -Path "server-package/*" -DestinationPath "dist/SLANFM-server-windows.zip" -Force
+
+      - name: List dist directory
+        run: dir dist
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
