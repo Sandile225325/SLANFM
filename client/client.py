@@ -40,6 +40,7 @@ class FileClient:
                 if not (chunk_min <= chunk_size <= chunk_max):
                     self.socket.close()
                     return "В установленный промежуток размера чанка не входит размер чанка установленный на сервере"
+                
                 if not (timeout_min <= timeout <= timeout_max):
                     self.socket.close()
                     return "В установленный промежуток таймаута не входит таймаут установленный на сервере"

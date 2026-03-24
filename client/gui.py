@@ -94,10 +94,12 @@ class FileManagerGUI:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"connect_config": {"PORT": "6666"}}
+            return {"connect_config": {"PORT": "6666"},
+                    "input_save_config": {"host": ""}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"connect_config": {"PORT": "6666"}}
+            return {"connect_config": {"PORT": "6666"},
+                    "input_save_config": {"host": ""}}
 
     def create_widgets(self):
         connect_frame = ttk.LabelFrame(self.root, text="Подключение к серверу", padding=10)
@@ -106,6 +108,7 @@ class FileManagerGUI:
         ttk.Label(connect_frame, text="IP сервера:").grid(row=0, column=0, padx=5)
         self.server_ip = ttk.Entry(connect_frame, width=20)
         self.server_ip.grid(row=0, column=1, padx=5)
+        self.server_ip.insert(0, self.config.get("input_save_config", {}).get("host", ""))
 
         ttk.Button(connect_frame, text="Подключиться",
                    command=self.connect_server).grid(row=0, column=2, padx=5)
@@ -252,6 +255,7 @@ class FileManagerGUI:
 
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                     self.status_var.set(f"Подключено к {ip}:{port}")
+                    self.save_input(ip, "host")
                     success = True
                     self.connected = True
 
@@ -557,6 +561,31 @@ class FileManagerGUI:
         if not self.operation_in_progress and self.progress_var.get() == 0:
             self.progress_var.set(0)
             self.status_text.set("Готово")
+
+    def save_input(self, input_str, key):
+        try:
+            try:
+                with open(self.resource_path(self.config_file), 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                data = {}
+
+            default_section="input_save_config"
+            key = f"{default_section}.{key}"
+            
+            keys = key.split('.')
+            current = data
+            for k in keys[:-1]:
+                if k not in current:
+                    current[k] = {}
+                current = current[k]
+            current[keys[-1]] = input_str
+
+            with open(self.resource_path(self.config_file), 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+        except Exception:
+            return
 
     def copy_to_clipboard(self, event):
         try:
