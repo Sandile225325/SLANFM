@@ -1,4 +1,4 @@
-name: SLANFM
+name: SLANFM build and release
 
 on:
   push:
@@ -46,12 +46,30 @@ jobs:
       - name: List dist directory
         run: dir dist
 
+      - name: Prepare client package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "client-package" -Force
+          Copy-Item "dist/SLANFM-client-windows.exe" "client-package/"
+          Copy-Item "client/icon.png" "client-package/"
+          Copy-Item "client/icon.ico" "client-package/"
+          Copy-Item "client/config.json" "client-package/"
+          Compress-Archive -Path "client-package/*" -DestinationPath "dist/SLANFM-client-windows.zip" -Force
+
+      - name: Prepare server package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "server-package" -Force
+          Copy-Item "dist/SLANFM-server-windows.exe" "server-package/"
+          Copy-Item "server/server_config.json" "server-package/"
+          Compress-Archive -Path "server-package/*" -DestinationPath "dist/SLANFM-server-windows.zip" -Force
+
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/SLANFM-client-windows.exe
-            dist/SLANFM-server-windows.exe
+            dist/SLANFM-client-windows.zip
+            dist/SLANFM-server-windows.zip
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           draft: false
