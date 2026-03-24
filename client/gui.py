@@ -87,10 +87,18 @@ class FileManagerGUI:
         except AttributeError:
             base_path = Path(__file__).parent
         return base_path / relative_path
+    
+    def config_path(self):
+        if getattr(sys, 'frozen', False):
+            base_path = Path(sys.executable).parent
+        else:
+            base_path = Path(__file__).parent
+        return base_path / self.config_file
 
-    def load_config(self, file):
+    def load_config(self):
         try:
-            with open(self.resource_path(file), 'r', encoding='utf-8') as f:
+            config_path = self.config_path()
+            with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
@@ -98,6 +106,10 @@ class FileManagerGUI:
                     "input_save_config": {"host": ""}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
+            return {"connect_config": {"PORT": "6666"},
+                    "input_save_config": {"host": ""}}
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка загрузки конфига: {e}")
             return {"connect_config": {"PORT": "6666"},
                     "input_save_config": {"host": ""}}
 
@@ -564,8 +576,9 @@ class FileManagerGUI:
 
     def save_input(self, input_str, key):
         try:
+            config_path = self.get_config_path()
             try:
-                with open(self.resource_path(self.config_file), 'r', encoding='utf-8') as f:
+                with open(config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 data = {}
@@ -581,7 +594,7 @@ class FileManagerGUI:
                 current = current[k]
             current[keys[-1]] = input_str
 
-            with open(self.resource_path(self.config_file), 'w', encoding='utf-8') as f:
+            with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 
         except Exception:
