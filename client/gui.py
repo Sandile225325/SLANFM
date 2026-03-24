@@ -28,7 +28,7 @@ class FileManagerGUI:
         self.connected = False
 
         self.config_file = "config.json"
-        self.config = self.load_config(self.config_file)
+        self.config = self.load_config()
 
         self.sort_reverse = True
         self.sort_column = 'modified'
@@ -576,7 +576,7 @@ class FileManagerGUI:
 
     def save_input(self, input_str, key):
         try:
-            config_path = self.get_config_path()
+            config_path = self.config_path()
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
