@@ -44,40 +44,48 @@ jobs:
             server/server.py
 
       - name: Create client package
-        shell: cmd
+        shell: powershell
         run: |
-          if exist client-package rmdir /s /q client-package
-          mkdir client-package
-          copy dist\SLANFM-client-windows.exe client-package\
-          copy client\icon.png client-package\
-          copy client\icon.ico client-package\
-          copy client\config.json client-package\
-          
-          echo @echo off > client-package\start_client.bat
-          echo echo Creating SLANFM configuration directory... >> client-package\start_client.bat
-          echo if not exist "%%APPDATA%%\SLANFM" mkdir "%%APPDATA%%\SLANFM" >> client-package\start_client.bat
-          echo if not exist "%%APPDATA%%\SLANFM\config.json" ( >> client-package\start_client.bat
-          echo     echo Copying default configuration... >> client-package\start_client.bat
-          echo     copy "%%~dp0config.json" "%%APPDATA%%\SLANFM\config.json" >> client-package\start_client.bat
-          echo ) >> client-package\start_client.bat
-          echo echo Starting SLANFM Client... >> client-package\start_client.bat
-          echo start "" "%%~dp0SLANFM-client-windows.exe" >> client-package\start_client.bat
-          
-          powershell -Command "Compress-Archive -Path client-package/* -DestinationPath dist/SLANFM-client-windows.zip -Force"
+          if (Test-Path client-package) { Remove-Item -Recurse -Force client-package }
+          New-Item -ItemType Directory -Path client-package | Out-Null
+
+          Copy-Item dist\SLANFM-client-windows.exe client-package\
+          Copy-Item client\icon.png client-package\
+          Copy-Item client\icon.ico client-package\
+          Copy-Item client\config.json client-package\
+
+          $batContent = @'
+          @echo off
+          echo Creating SLANFM configuration directory...
+          if not exist "%APPDATA%\SLANFM" mkdir "%APPDATA%\SLANFM"
+          if not exist "%APPDATA%\SLANFM\config.json" (
+              echo Copying default configuration...
+              copy "%~dp0config.json" "%APPDATA%\SLANFM\config.json"
+          )
+          echo Starting SLANFM Client...
+          start "" "%~dp0SLANFM-client-windows.exe"
+          '@
+          $batContent | Out-File -FilePath client-package\start_client.bat -Encoding ASCII
+
+          Compress-Archive -Path client-package\* -DestinationPath dist\SLANFM-client-windows.zip -Force
 
       - name: Create server package
-        shell: cmd
+        shell: powershell
         run: |
-          if exist server-package rmdir /s /q server-package
-          mkdir server-package
-          copy dist\SLANFM-server-windows.exe server-package\
-          copy server\server_config.json server-package\
-          
-          echo @echo off > server-package\start_server.bat
-          echo echo Starting SLANFM Server... >> server-package\start_server.bat
-          echo start "" "%%~dp0SLANFM-server-windows.exe" >> server-package\start_server.bat
-          
-          powershell -Command "Compress-Archive -Path server-package/* -DestinationPath dist/SLANFM-server-windows.zip -Force"
+          if (Test-Path server-package) { Remove-Item -Recurse -Force server-package }
+          New-Item -ItemType Directory -Path server-package | Out-Null
+
+          Copy-Item dist\SLANFM-server-windows.exe server-package\
+          Copy-Item server\server_config.json server-package\
+
+          $batContent = @'
+          @echo off
+          echo Starting SLANFM Server...
+          start "" "%~dp0SLANFM-server-windows.exe"
+          '@
+          $batContent | Out-File -FilePath server-package\start_server.bat -Encoding ASCII
+
+          Compress-Archive -Path server-package\* -DestinationPath dist\SLANFM-server-windows.zip -Force
 
       - name: List dist directory
         run: dir dist
