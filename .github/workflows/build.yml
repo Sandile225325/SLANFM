@@ -46,14 +46,18 @@ jobs:
       - name: Create client package
         shell: powershell
         run: |
-          if (Test-Path client-package) { Remove-Item -Recurse -Force client-package }
-          New-Item -ItemType Directory -Path client-package | Out-Null
+          Write-Host "Creating client package"
+          $packageDir = "client-package"
+          if (Test-Path $packageDir) { Remove-Item -Recurse -Force $packageDir }
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
-          Copy-Item dist\SLANFM-client-windows.exe client-package\
-          Copy-Item client\icon.png client-package\
-          Copy-Item client\icon.ico client-package\
-          Copy-Item client\config.json client-package\
+          Write-Host "Copying files to $packageDir"
+          Copy-Item "dist\SLANFM-client-windows.exe" "$packageDir\" -ErrorAction Stop
+          Copy-Item "client\icon.png" "$packageDir\" -ErrorAction Stop
+          Copy-Item "client\icon.ico" "$packageDir\" -ErrorAction Stop
+          Copy-Item "client\config.json" "$packageDir\" -ErrorAction Stop
 
+          Write-Host "Creating start_client.bat"
           $batContent = @'
           @echo off
           echo Creating SLANFM configuration directory...
@@ -65,27 +69,35 @@ jobs:
           echo Starting SLANFM Client...
           start "" "%~dp0SLANFM-client-windows.exe"
           '@
-          $batContent | Out-File -FilePath client-package\start_client.bat -Encoding ASCII
+          $batFile = Join-Path $packageDir "start_client.bat"
+          $batContent | Out-File -FilePath $batFile -Encoding ASCII -Force
 
-          Compress-Archive -Path client-package\* -DestinationPath dist\SLANFM-client-windows.zip -Force
+          Write-Host "Creating zip"
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\SLANFM-client-windows.zip" -Force
 
       - name: Create server package
         shell: powershell
         run: |
-          if (Test-Path server-package) { Remove-Item -Recurse -Force server-package }
-          New-Item -ItemType Directory -Path server-package | Out-Null
+          Write-Host "Creating server package"
+          $packageDir = "server-package"
+          if (Test-Path $packageDir) { Remove-Item -Recurse -Force $packageDir }
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
-          Copy-Item dist\SLANFM-server-windows.exe server-package\
-          Copy-Item server\server_config.json server-package\
+          Write-Host "Copying files to $packageDir"
+          Copy-Item "dist\SLANFM-server-windows.exe" "$packageDir\" -ErrorAction Stop
+          Copy-Item "server\server_config.json" "$packageDir\" -ErrorAction Stop
 
+          Write-Host "Creating start_server.bat"
           $batContent = @'
           @echo off
           echo Starting SLANFM Server...
           start "" "%~dp0SLANFM-server-windows.exe"
           '@
-          $batContent | Out-File -FilePath server-package\start_server.bat -Encoding ASCII
+          $batFile = Join-Path $packageDir "start_server.bat"
+          $batContent | Out-File -FilePath $batFile -Encoding ASCII -Force
 
-          Compress-Archive -Path server-package\* -DestinationPath dist\SLANFM-server-windows.zip -Force
+          Write-Host "Creating zip"
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\SLANFM-server-windows.zip" -Force
 
       - name: List dist directory
         run: dir dist
