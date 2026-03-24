@@ -57,21 +57,6 @@ jobs:
           Copy-Item "client\icon.ico" "$packageDir\" -ErrorAction Stop
           Copy-Item "client\config.json" "$packageDir\" -ErrorAction Stop
 
-          Write-Host "Creating start_client.bat"
-          $batContent = @'
-          @echo off
-          echo Creating SLANFM configuration directory...
-          if not exist "%APPDATA%\SLANFM" mkdir "%APPDATA%\SLANFM"
-          if not exist "%APPDATA%\SLANFM\config.json" (
-              echo Copying default configuration...
-              copy "%~dp0config.json" "%APPDATA%\SLANFM\config.json"
-          )
-          echo Starting SLANFM Client...
-          start "" "%~dp0SLANFM-client-windows.exe"
-          '@
-          $batFile = Join-Path $packageDir "start_client.bat"
-          $batContent | Out-File -FilePath $batFile -Encoding ASCII -Force
-
           Write-Host "Creating zip"
           Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\SLANFM-client-windows.zip" -Force
 
@@ -86,15 +71,6 @@ jobs:
           Write-Host "Copying files to $packageDir"
           Copy-Item "dist\SLANFM-server-windows.exe" "$packageDir\" -ErrorAction Stop
           Copy-Item "server\server_config.json" "$packageDir\" -ErrorAction Stop
-
-          Write-Host "Creating start_server.bat"
-          $batContent = @'
-          @echo off
-          echo Starting SLANFM Server...
-          start "" "%~dp0SLANFM-server-windows.exe"
-          '@
-          $batFile = Join-Path $packageDir "start_server.bat"
-          $batContent | Out-File -FilePath $batFile -Encoding ASCII -Force
 
           Write-Host "Creating zip"
           Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\SLANFM-server-windows.zip" -Force
