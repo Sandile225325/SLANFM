@@ -46,6 +46,7 @@ jobs:
       - name: Create client package
         shell: cmd
         run: |
+          if exist client-package rmdir /s /q client-package
           mkdir client-package
           copy dist\SLANFM-client-windows.exe client-package\
           copy client\icon.png client-package\
@@ -67,6 +68,7 @@ jobs:
       - name: Create server package
         shell: cmd
         run: |
+          if exist server-package rmdir /s /q server-package
           mkdir server-package
           copy dist\SLANFM-server-windows.exe server-package\
           copy server\server_config.json server-package\
