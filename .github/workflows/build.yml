@@ -43,45 +43,39 @@ jobs:
             --name "SLANFM-server-windows" ^
             server/server.py
 
-      - name: Create client installer script
-        shell: pwsh
+      - name: Create client package
+        shell: cmd
         run: |
-          @"
-          @echo off
-          echo Creating SLANFM configuration directory...
-          if not exist "%APPDATA%\SLANFM" mkdir "%APPDATA%\SLANFM"
-          if not exist "%APPDATA%\SLANFM\config.json" (
-              echo Copying default configuration...
-              copy "%~dp0config.json" "%APPDATA%\SLANFM\config.json"
-          )
-          echo Starting SLANFM Client...
-          start "" "%~dp0SLANFM-client-windows.exe"
-          "@ | Out-File -FilePath "client-package/start_client.bat" -Encoding ASCII
+          mkdir client-package
+          copy dist\SLANFM-client-windows.exe client-package\
+          copy client\icon.png client-package\
+          copy client\icon.ico client-package\
+          copy client\config.json client-package\
           
-          New-Item -ItemType Directory -Path "client-package" -Force
-          Copy-Item "dist/SLANFM-client-windows.exe" "client-package/"
-          Copy-Item "client/icon.png" "client-package/"
-          Copy-Item "client/icon.ico" "client-package/"
-          Copy-Item "client/config.json" "client-package/"
-          Copy-Item "client-package/start_client.bat" "client-package/"
+          echo @echo off > client-package\start_client.bat
+          echo echo Creating SLANFM configuration directory... >> client-package\start_client.bat
+          echo if not exist "%%APPDATA%%\SLANFM" mkdir "%%APPDATA%%\SLANFM" >> client-package\start_client.bat
+          echo if not exist "%%APPDATA%%\SLANFM\config.json" ( >> client-package\start_client.bat
+          echo     echo Copying default configuration... >> client-package\start_client.bat
+          echo     copy "%%~dp0config.json" "%%APPDATA%%\SLANFM\config.json" >> client-package\start_client.bat
+          echo ) >> client-package\start_client.bat
+          echo echo Starting SLANFM Client... >> client-package\start_client.bat
+          echo start "" "%%~dp0SLANFM-client-windows.exe" >> client-package\start_client.bat
           
-          Compress-Archive -Path "client-package/*" -DestinationPath "dist/SLANFM-client-windows.zip" -Force
+          powershell -Command "Compress-Archive -Path client-package/* -DestinationPath dist/SLANFM-client-windows.zip -Force"
 
-      - name: Create server installer script
-        shell: pwsh
+      - name: Create server package
+        shell: cmd
         run: |
-          @"
-          @echo off
-          echo Starting SLANFM Server...
-          start "" "%~dp0SLANFM-server-windows.exe"
-          "@ | Out-File -FilePath "server-package/start_server.bat" -Encoding ASCII
+          mkdir server-package
+          copy dist\SLANFM-server-windows.exe server-package\
+          copy server\server_config.json server-package\
           
-          New-Item -ItemType Directory -Path "server-package" -Force
-          Copy-Item "dist/SLANFM-server-windows.exe" "server-package/"
-          Copy-Item "server/server_config.json" "server-package/"
-          Copy-Item "server-package/start_server.bat" "server-package/"
+          echo @echo off > server-package\start_server.bat
+          echo echo Starting SLANFM Server... >> server-package\start_server.bat
+          echo start "" "%%~dp0SLANFM-server-windows.exe" >> server-package\start_server.bat
           
-          Compress-Archive -Path "server-package/*" -DestinationPath "dist/SLANFM-server-windows.zip" -Force
+          powershell -Command "Compress-Archive -Path server-package/* -DestinationPath dist/SLANFM-server-windows.zip -Force"
 
       - name: List dist directory
         run: dir dist
