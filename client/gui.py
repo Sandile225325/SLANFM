@@ -26,6 +26,10 @@ class FileManagerGUI:
         self.operation_in_progress = False
         self.connect_operation = False
         self.connected = False
+        self.ip = None
+        self.port = None
+        
+        self.version = '1.3.0'
 
         self.config_file = "config.json"
         self.config = self.load_config()
@@ -158,6 +162,8 @@ class FileManagerGUI:
                    command=self.download_file).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Удалить с сервера",
                    command=self.delete_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="?", width=3,
+                   command=self.show_about).pack(side=tk.RIGHT, padx=5)
 
         progress_frame = ttk.Frame(self.root)
         progress_frame.pack(fill="x", padx=10, pady=1)
@@ -244,7 +250,7 @@ class FileManagerGUI:
         user_input = self.server_ip.get().strip()
         ip = user_input
 
-        port_str = self.config.get("server_config", {}).get("PORT", "6666")
+        port_str = self.config.get("connect_config", {}).get("PORT", "6666")
         try:
             port = int(port_str)
         except ValueError:
@@ -270,6 +276,7 @@ class FileManagerGUI:
                     self.save_input(ip, "host")
                     success = True
                     self.connected = True
+                    self.ip, self.port = ip, port
 
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
@@ -309,6 +316,8 @@ class FileManagerGUI:
             self.total_size = 0
             self.total_number = 0
             self.connected = False
+            self.ip = None
+            self.port = None
 
     def refresh_files(self, dont_reset_progress=False):
         if not self.client:
@@ -599,6 +608,85 @@ class FileManagerGUI:
                 
         except Exception:
             return
+        
+    def show_about(self):
+        self.update_files_list()
+
+        def format_size(size_bytes):
+            if size_bytes < 1024:
+                return size_bytes, 'B'
+            elif size_bytes < 1024 ** 2:
+                return size_bytes // 1024, 'KB'
+            elif size_bytes < 1024 ** 3:
+                return size_bytes // (1024 ** 2), 'MB'
+            elif size_bytes < 1024 ** 4:
+                return size_bytes // (1024 ** 3), 'GB'
+            else:
+                return size_bytes // (1024 ** 4), 'TB'
+            
+        def format_total_size(size):
+            if size > 1024:
+                return round(size / 1024, 2), 'GB'
+            else:
+                return round(size), 'MB'
+            
+        def format_range_value(value):
+            if value < 1024:
+                return f"{value} B"
+            elif value < 1024 ** 2:
+                return f"{value // 1024} KB"
+            elif value < 1024 ** 3:
+                return f"{value // (1024 ** 2)} MB"
+            elif value < 1024 ** 4:
+                return f"{value // (1024 ** 3)} GB"
+            else:
+                return f"{value // (1024 ** 4)} TB"
+        
+        if self.connected:
+            total_size, ts_unit = format_total_size(self.total_size)
+            max_file_size, mfs_unit = format_size(self.client.max_file_size)
+            chunk_size, chs_unit = format_size(self.client.chunk_size)
+
+            about_text = f"""
+            SLANFM
+
+            Версия: {self.version}
+
+            Подключено к {self.ip}:{self.port}
+
+            Количество файлов на сервере: {self.total_number}
+            Общий размер файлов на сервере: {total_size} {ts_unit}
+
+            Максимальный размер файла: {max_file_size} {mfs_unit}
+            Размер чанка: {chunk_size} {chs_unit}
+            Таймаут: {self.client.timeout} с
+            """
+
+        else:
+            cfg = getattr(self, 'config', {}).get('values_config', {})
+            chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
+            timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
+            
+            chunk_min_formatted = format_range_value(chunk_min)
+            chunk_max_formatted = format_range_value(chunk_max)
+
+            about_text = f"""
+            SLANFM
+
+            Версия: {self.version}
+
+            Нет подключения к серверу
+
+            Разрешённый диапазон размера чанка:
+            • Минимум: {chunk_min_formatted}
+            • Максимум: {chunk_max_formatted}
+
+            Разрешённый диапазон таймаута:
+            • Минимум: {timeout_min} с
+            • Максимум: {timeout_max} с
+            """
+
+        messagebox.showinfo("Информация", about_text)
 
     def copy_to_clipboard(self, event):
         try:
