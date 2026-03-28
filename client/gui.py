@@ -29,7 +29,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
         
-        self.version = '1.3.0'
+        self.version = '1.3.1'
 
         self.config_file = "config.json"
         self.config = self.load_config()
@@ -484,7 +484,7 @@ class FileManagerGUI:
             operation_success = False
             try:
                 filename = item['values'][0]
-                save_path = self.download_dir / filename
+                save_path = self.download_dir / os.path.basename(filename)
 
                 if save_path.exists():
                     self.progress_queue.put({'ask_overwrite_local': str(save_path)})

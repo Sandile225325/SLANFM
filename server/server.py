@@ -153,8 +153,12 @@ class FileServer:
         
     def is_safe_path(self, filename):
         try:
-            requested_path = (self.upload_dir / filename).resolve()
-            return self.upload_dir.resolve() in requested_path.parents or requested_path == self.upload_dir.resolve()
+            user_path = Path(filename)
+            if user_path.is_absolute():
+                return False
+            requested_path = (self.upload_dir / user_path).resolve()
+            base_path = self.upload_dir.resolve()
+            return base_path == requested_path or base_path in requested_path.parents
         except Exception:
             return False
 
@@ -168,38 +172,42 @@ class FileServer:
             })
 
             while True:
-                command_data = self.receive_all(client_socket, 4)
-                if not command_data or len(command_data) != 4:
-                    break
-
-                data_length = struct.unpack('>I', command_data)[0]
-                json_data = self.receive_all(client_socket, data_length)
-
-                if not json_data:
-                    break
-
                 try:
-                    command = json.loads(json_data.decode('utf-8'))
-                except UnicodeDecodeError:
-                    logging.error(f"Ошибка декодирования JSON от {address}")
-                    break
+                    command_data = self.receive_all(client_socket, 4)
+                    if not command_data or len(command_data) != 4:
+                        break
 
-                cmd = command.get('command')
+                    data_length = struct.unpack('>I', command_data)[0]
+                    json_data = self.receive_all(client_socket, data_length)
 
-                if cmd == 'list':
-                    self.send_file_list(client_socket)
-                elif cmd == 'upload':
-                    self.receive_file(client_socket, command)
-                elif cmd == 'download':
-                    self.send_file(client_socket, command)
-                elif cmd == 'delete':
-                    self.delete_file(client_socket, command)
-                elif cmd == 'info':
-                    self.send_server_info(client_socket)
-                elif cmd == 'disconnect':
+                    if not json_data:
+                        break
+
+                    try:
+                        command = json.loads(json_data.decode('utf-8'))
+                    except UnicodeDecodeError:
+                        logging.error(f"Ошибка декодирования JSON от {address}")
+                        break
+
+                    cmd = command.get('command')
+
+                    if cmd == 'list':
+                        self.send_file_list(client_socket)
+                    elif cmd == 'upload':
+                        self.receive_file(client_socket, command)
+                    elif cmd == 'download':
+                        self.send_file(client_socket, command)
+                    elif cmd == 'delete':
+                        self.delete_file(client_socket, command)
+                    elif cmd == 'info':
+                        self.send_server_info(client_socket)
+                    elif cmd == 'disconnect':
+                        break
+                    else:
+                        self.send_response(client_socket, {'status': 'error', 'message': 'Неизвестная команда'})
+                except Exception as e:
+                    logging.error(f"Ошибка с клиентом {address}: {e}", exc_info=True)
                     break
-                else:
-                    self.send_response(client_socket, {'status': 'error', 'message': 'Неизвестная команда'})
 
         except Exception as e:
             logging.error(f"Ошибка с клиентом {address}: {e}", exc_info=True)
@@ -314,6 +322,14 @@ class FileServer:
 
                         chunk_size = struct.unpack('>I', chunk_size_data)[0]
 
+                        if chunk_size > self.chunk_size:
+                            raise ValueError(f"Размер чанка {chunk_size} превышает максимально допустимый {self.chunk_size}")
+
+                        remaining = file_size - received
+
+                        if chunk_size > remaining:
+                            raise ValueError(f"Размер чанка {chunk_size} превышает оставшийся размер файла {remaining}")
+
                         chunk = self.receive_all(client_socket, chunk_size)
                         if not chunk or len(chunk) != chunk_size:
                             raise ConnectionError(f"Не удалось получить чанк: ожидалось {chunk_size}, получено {len(chunk) if chunk else 0}")
@@ -325,7 +341,7 @@ class FileServer:
                             percent = (received / file_size) * 100
                             logging.info(f"Прием {filename}: {percent:.1f}% ({received}/{file_size} байт)")
 
-                    except (ConnectionError, socket.timeout, struct.error) as e:
+                    except (ConnectionError, socket.timeout, struct.error, ValueError) as e:
                         logging.error(f"Ошибка приема чанка: {e}")
                         raise
 
