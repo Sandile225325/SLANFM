@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading
 from client import FileClient
 import os
@@ -29,7 +29,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
         
-        self.version = '1.3.1'
+        self.version = '1.4.0'
 
         self.config_file = "config.json"
         self.config = self.load_config()
@@ -242,6 +242,41 @@ class FileManagerGUI:
             else:
                 heading['text'] = text
 
+    def authenticate(self, ip, port):
+        token = simpledialog.askstring("Аутентификация", "Введите пароль:", parent=self.root)
+        if token:
+
+            def auth_thread():
+                try:
+
+                    if self.client.authenticate(token):
+                        self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
+                        self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
+                        self.status_var.set(f"Подключено к {ip}:{port}")
+                        self.save_input(ip, "host")
+                        self.connected = True
+                        self.ip, self.port = ip, port
+                        self.root.after(0, self.refresh_files(True))
+
+                    else:
+                        messagebox.showerror("Ошибка", "Неверный токен")
+                        self.disconnect_server()
+
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Ошибка аутентификации: {e}")
+                    self.disconnect_server()
+
+                finally:
+                    self.operation_in_progress = False
+                    self.connect_operation = False
+
+            threading.Thread(target=auth_thread, daemon=True).start()
+
+        else:
+            self.client.disconnect()
+            self.operation_in_progress = False
+            self.connect_operation = False
+
     def connect_server(self):
         if self.operation_in_progress:
             messagebox.showwarning("Внимание", "Дождитесь завершения текущей операции")
@@ -270,13 +305,16 @@ class FileManagerGUI:
 
                 if connect_result is True:
                     self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
-
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                     self.status_var.set(f"Подключено к {ip}:{port}")
                     self.save_input(ip, "host")
                     success = True
                     self.connected = True
                     self.ip, self.port = ip, port
+
+                elif connect_result == "need_auth":
+                    self.progress_queue.put({'status': 'Требуется аутентификация'})
+                    self.root.after(0, lambda: self.authenticate(ip, port))
 
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
@@ -610,7 +648,6 @@ class FileManagerGUI:
             return
         
     def show_about(self):
-        self.update_files_list()
 
         def format_size(size_bytes):
             if size_bytes < 1024:
@@ -643,6 +680,8 @@ class FileManagerGUI:
                 return f"{value // (1024 ** 4)} TB"
         
         if self.connected:
+            self.update_files_list()
+
             total_size, ts_unit = format_total_size(self.total_size)
             max_file_size, mfs_unit = format_size(self.client.max_file_size)
             chunk_size, chs_unit = format_size(self.client.chunk_size)

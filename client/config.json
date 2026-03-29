@@ -14,5 +14,8 @@
   },
   "input_save_config": {
     "host": ""
+  },
+  "authentication": {
+    "token": ""
   }
 }

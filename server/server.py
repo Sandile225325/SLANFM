@@ -24,6 +24,7 @@ class FileServer:
         self.chunk_size = 65536
         self.timeout = 120
         self.can_clients_delete_files = True
+        self.auth_token = None
 
         if config_path:
             self.load_config(config_path)
@@ -104,6 +105,13 @@ class FileServer:
                 else:
                     logging.warning(f"Некорректный can_clients_delete_files в конфиге: {can_clients_delete_files}. Используется значение {self.can_clients_delete_files}")
 
+            if 'auth_token' in config:
+                auth_token = config['auth_token']
+                if isinstance(auth_token, str):
+                    self.auth_token = auth_token
+                else:
+                    logging.warning(f"Некорректный auth_token в конфиге: {auth_token}. Аутентификация для клиентов не требуется")
+
             logging.info(f"Конфигурация загружена из {config_path}")
 
         except json.JSONDecodeError as e:
@@ -121,8 +129,11 @@ class FileServer:
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
         self.server.listen(5)
+
+        auth_required = 'включена' if self.auth_token else 'не требуется'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
+        logging.info(f"Аутентификация для пользователей {auth_required}")
 
         try:
             while True:
@@ -168,8 +179,36 @@ class FileServer:
                 'type': 'init',
                 'chunk_size': self.chunk_size,
                 'max_file_size': self.max_file_size,
-                'timeout': self.timeout
+                'timeout': self.timeout,
+                'auth_required': bool(self.auth_token)
             })
+
+            if self.auth_token:
+                command_data = self.receive_all(client_socket, 4)
+                if not command_data or len(command_data) != 4:
+                    return
+
+                data_length = struct.unpack('>I', command_data)[0]
+                json_data = self.receive_all(client_socket, data_length)
+                if not json_data:
+                    return
+
+                try:
+                    command = json.loads(json_data.decode('utf-8'))
+                except UnicodeDecodeError:
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Ошибка декодирования'})
+                    return
+
+                if command.get('command') != 'auth':
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Требуется аутентификация'})
+                    return
+
+                token = command.get('token', '')
+                if token != self.auth_token:
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Неверный токен'})
+                    return
+
+                self.send_response(client_socket, {'status': 'success', 'message': 'Аутентификация успешна'})
 
             while True:
                 try:

@@ -19,6 +19,7 @@ class FileClient:
         self.timeout = 120
         self.config_file = "config.json"
         self.config = self.load_config(self.config_file)
+        self.auth_token = self.config.get('authentication', {}).get('token', '')
 
     def connect(self):
         try:
@@ -32,6 +33,7 @@ class FileClient:
                 cfg = getattr(self, 'config', {}).get('values_config', {})
                 chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
                 timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
+                auth_required = init_response.get('auth_required', False)
 
                 chunk_size = init_response['chunk_size']
                 max_file_size = init_response['max_file_size']
@@ -49,6 +51,20 @@ class FileClient:
                 self.max_file_size = max_file_size
                 self.timeout = timeout
                 self.socket.settimeout(self.timeout)
+
+                if auth_required:
+                    if self.auth_token:
+                        self.send_command({
+                            'command': 'auth', 
+                            'token': self.auth_token
+                        })
+
+                        auth_response = self.receive_response()
+                        if not auth_response or auth_response.get('status') != 'success':
+                            self.socket.close()
+                            return "Ошибка аутентификации: неверный токен"
+                    else:
+                        return "need_auth"
             else:
                 self.socket.close()
                 return False
@@ -68,17 +84,40 @@ class FileClient:
     def load_config(self, file):
         try:
             with open(self.resource_path(file), 'r', encoding='utf-8') as f:
-                return json.load(f)
+                config = json.load(f)               
+                if 'authentication' not in config:
+                    config['authentication'] = {'token': ''}
+                elif 'token' not in config['authentication']:
+                    config['authentication']['token'] = ''
+                return config
         except FileNotFoundError:
-            return {"values_config": {
-                "chunk_size_range": [1024, 10485760],
-                "timeout_range": [1, 300]
-            }}
+            return {
+                "values_config": {
+                    "chunk_size_range": [1024, 10485760],
+                    "timeout_range": [1, 300]
+                },
+                "authentication": {"token": ""}
+            }
         except json.JSONDecodeError:
-            return {"values_config": {
-                "chunk_size_range": [1024, 10485760],
-                "timeout_range": [1, 300]
-              }}
+            return {
+                "values_config": {
+                    "chunk_size_range": [1024, 10485760],
+                    "timeout_range": [1, 300]
+                },
+                "authentication": {"token": ""}
+            }
+        
+    def authenticate(self, token):
+        self.send_command({
+            'command': 'auth', 
+            'token': token
+        })
+
+        response = self.receive_response()
+        if response and response.get('status') == 'success':
+            return True
+        else:
+            return False
 
     def download_file(self, filename, save_path=None, progress_callback=None):
         if not save_path:
