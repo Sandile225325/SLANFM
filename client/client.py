@@ -88,9 +88,9 @@ class FileClient:
             base_path = Path(__file__).parent
         return base_path / self.config_file
 
-    def load_config(self, file):
+    def load_config(self):
         try:
-            with open(self.config_path(file), 'r', encoding='utf-8') as f:
+            with open(self.config_path(), 'r', encoding='utf-8') as f:
                 config = json.load(f)               
                 if 'authentication' not in config:
                     config['authentication'] = {'token': ''}
