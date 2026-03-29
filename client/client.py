@@ -80,10 +80,17 @@ class FileClient:
         except AttributeError:
             base_path = Path(__file__).parent
         return base_path / relative_path
+    
+    def config_path(self):
+        if getattr(sys, 'frozen', False):
+            base_path = Path(sys.executable).parent
+        else:
+            base_path = Path(__file__).parent
+        return base_path / self.config_file
 
     def load_config(self, file):
         try:
-            with open(self.resource_path(file), 'r', encoding='utf-8') as f:
+            with open(self.config_path(file), 'r', encoding='utf-8') as f:
                 config = json.load(f)               
                 if 'authentication' not in config:
                     config['authentication'] = {'token': ''}
