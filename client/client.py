@@ -18,7 +18,7 @@ class FileClient:
         self.max_file_size = 2 * 1024 * 1024 * 1024
         self.timeout = 120
         self.config_file = "config.json"
-        self.config = self.load_config(self.config_file)
+        self.config = self.load_config()
         self.auth_token = self.config.get('authentication', {}).get('token', '')
 
     def connect(self):
@@ -106,6 +106,14 @@ class FileClient:
                 "authentication": {"token": ""}
             }
         except json.JSONDecodeError:
+            return {
+                "values_config": {
+                    "chunk_size_range": [1024, 10485760],
+                    "timeout_range": [1, 300]
+                },
+                "authentication": {"token": ""}
+            }
+        except Exception:
             return {
                 "values_config": {
                     "chunk_size_range": [1024, 10485760],
