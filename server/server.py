@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import struct
 import sys
+import ssl
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -25,9 +26,15 @@ class FileServer:
         self.timeout = 120
         self.can_clients_delete_files = True
         self.auth_token = None
+        self.tls_enabled = False
+        self.cert_file = None
+        self.key_file = None
+        self.ssl_context = None
 
         if config_path:
             self.load_config(config_path)
+            if self.tls_enabled:
+                self.setup_tls()
 
     def resource_path(self, relative_path):
         try:
@@ -112,12 +119,44 @@ class FileServer:
                 else:
                     logging.warning(f"Некорректный auth_token в конфиге: {auth_token}. Аутентификация для клиентов не требуется")
 
+            if 'tls_enabled' in config:
+                tls_enabled = config['tls_enabled']
+                if isinstance(tls_enabled, bool):
+                    self.tls_enabled = tls_enabled
+                else:
+                    logging.warning(f"Некорректный tls_enabled в конфиге: {tls_enabled}. Используется значение {self.tls_enabled}")
+
+            if 'cert_file' in config:
+                if self.tls_enabled:
+                    cert_file = config['cert_file']
+                    if isinstance(cert_file, str):
+                        self.cert_file = cert_file
+                    else:
+                        logging.warning(f"Некорректный cert_file в конфиге: {cert_file}. Используется значение {self.cert_file}")
+
+            if 'key_file' in config:
+                if self.tls_enabled:
+                    key_file = config['key_file']
+                    if isinstance(key_file, str):
+                        self.key_file = key_file
+                    else:
+                        logging.warning(f"Некорректный key_file в конфиге: {key_file}. Используется значение {self.key_file}")
+
             logging.info(f"Конфигурация загружена из {config_path}")
 
         except json.JSONDecodeError as e:
             logging.error(f"Ошибка парсинга JSON в конфигурации {config_path}: {e}")
         except Exception as e:
             logging.error(f"Ошибка загрузки конфигурации: {e}")
+
+    def setup_tls(self):
+        try:
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ssl_context.load_cert_chain(self.resource_path(self.cert_file), self.resource_path(self.key_file))
+        except Exception as e:
+            logging.error(f"Ошибка загрузки TLS сертификата: {e}")
+            self.tls_enabled = False
+            raise
 
     def start(self):
         if not self.is_port_available():
@@ -131,14 +170,24 @@ class FileServer:
         self.server.listen(5)
 
         auth_required = 'включена' if self.auth_token else 'не требуется'
+        tls_enabled = 'включён, сертификат и ключ загружены' if self.tls_enabled else 'выключен'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
         logging.info(f"Аутентификация для пользователей {auth_required}")
+        logging.info(f"TLS {tls_enabled}")
 
         try:
             while True:
                 client_socket, address = self.server.accept()
                 client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                if self.tls_enabled and self.ssl_context:
+                    try:
+                        client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
+                    except ssl.SSLError as e:
+                        logging.error(f"Ошибка TLS-рукопожатия с {address}: {e}")
+                        client_socket.close()
+                        continue
 
                 client_thread = threading.Thread(
                     target=self.handle_client,

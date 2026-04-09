@@ -15,7 +15,7 @@
   "input_save_config": {
     "host": ""
   },
-  "authentication": {
+  "authentication_config": {
     "token": ""
   }
 }

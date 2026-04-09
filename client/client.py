@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 import struct
 import sys
+import ssl
 
 
 class FileClient:
@@ -19,60 +20,82 @@ class FileClient:
         self.timeout = 120
         self.config_file = "config.json"
         self.config = self.load_config()
-        self.auth_token = self.config.get('authentication', {}).get('token', '')
+        self.auth_token = self.config.get('authentication_config', {}).get('token', '')
 
     def connect(self):
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.socket.settimeout(self.timeout)
-            self.socket.connect((self.server_host, self.server_port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.settimeout(2.5)
+            sock.connect((self.server_host, self.server_port))
 
+            original_socket = self.socket
+            self.socket = sock
             init_response = self.receive_response()
+            self.socket = original_socket
+
             if init_response and init_response.get('type') == 'init':
-                cfg = getattr(self, 'config', {}).get('values_config', {})
-                chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
-                timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
-                auth_required = init_response.get('auth_required', False)
-
-                chunk_size = init_response['chunk_size']
-                max_file_size = init_response['max_file_size']
-                timeout = init_response['timeout']
-
-                if not (chunk_min <= chunk_size <= chunk_max):
-                    self.socket.close()
-                    return "В установленный промежуток размера чанка не входит размер чанка установленный на сервере"
-                
-                if not (timeout_min <= timeout <= timeout_max):
-                    self.socket.close()
-                    return "В установленный промежуток таймаута не входит таймаут установленный на сервере"
-
-                self.chunk_size = chunk_size
-                self.max_file_size = max_file_size
-                self.timeout = timeout
-                self.socket.settimeout(self.timeout)
-
-                if auth_required:
-                    if self.auth_token:
-                        self.send_command({
-                            'command': 'auth', 
-                            'token': self.auth_token
-                        })
-
-                        auth_response = self.receive_response()
-                        if not auth_response or auth_response.get('status') != 'success':
-                            self.socket.close()
-                            return "Ошибка аутентификации: неверный токен"
-                    else:
-                        return "need_auth"
+                self.socket = sock
+                self.tls_enabled = False
             else:
+                sock.close()
+
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.settimeout(5)
+                sock.connect((self.server_host, self.server_port))
+
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                tls_sock = context.wrap_socket(sock, server_hostname=self.server_host)
+
+                self.socket = tls_sock
+                init_response = self.receive_response()
+                if init_response and init_response.get('type') == 'init':
+                    self.socket = tls_sock
+                    self.tls_enabled = True
+                else:
+                    tls_sock.close()
+                    self.socket = None
+                    return "Не удалось установить соединение с сервером"
+
+            cfg = getattr(self, 'config', {}).get('values_config', {})
+            chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
+            timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
+            auth_required = init_response.get('auth_required', False)
+
+            chunk_size = init_response['chunk_size']
+            max_file_size = init_response['max_file_size']
+            timeout = init_response['timeout']
+
+            if not (chunk_min <= chunk_size <= chunk_max):
                 self.socket.close()
-                return False
+                return "Размер чанка сервера не входит в допустимый диапазон клиента"
+            
+            if not (timeout_min <= timeout <= timeout_max):
+                self.socket.close()
+                return "Таймаут сервера не входит в допустимый диапазон клиента"
+
+            self.chunk_size = chunk_size
+            self.max_file_size = max_file_size
+            self.timeout = timeout
+            self.socket.settimeout(self.timeout)
+
+            if auth_required:
+                if self.auth_token:
+                    self.send_command({'command': 'auth', 'token': self.auth_token})
+                    auth_response = self.receive_response()
+                    if not auth_response or auth_response.get('status') != 'success':
+                        self.socket.close()
+                        return "Ошибка аутентификации: неверный токен"
+                else:
+                    return "need_auth"
 
             return True
 
-        except Exception:
-            return False
+        except Exception as e:
+            return f"Ошибка подключения: {e}"
         
     def resource_path(self, relative_path):
         try:
@@ -93,9 +116,9 @@ class FileClient:
             with open(self.config_path(), 'r', encoding='utf-8') as f:
                 config = json.load(f)               
                 if 'authentication' not in config:
-                    config['authentication'] = {'token': ''}
-                elif 'token' not in config['authentication']:
-                    config['authentication']['token'] = ''
+                    config['authentication_config'] = {'token': ''}
+                elif 'token' not in config['authentication_config']:
+                    config['authentication_config']['token'] = ''
                 return config
         except FileNotFoundError:
             return {
@@ -103,7 +126,7 @@ class FileClient:
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
                 },
-                "authentication": {"token": ""}
+                "authentication_config": {"token": ""}
             }
         except json.JSONDecodeError:
             return {
@@ -111,7 +134,7 @@ class FileClient:
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
                 },
-                "authentication": {"token": ""}
+                "authentication_config": {"token": ""}
             }
         except Exception:
             return {
@@ -119,7 +142,7 @@ class FileClient:
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
                 },
-                "authentication": {"token": ""}
+                "authentication_config": {"token": ""}
             }
         
     def authenticate(self, token):
