@@ -1,0 +1,6 @@
+certificate.crt
+private_key.key
+__pycache__/
+*.pyc
+downloads/
+server_files/
