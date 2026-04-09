@@ -151,8 +151,15 @@ class FileServer:
 
     def setup_tls(self):
         try:
+            cert_file = Path(self.cert_file)
+            key_file = Path(self.key_file)
+            if not cert_file.is_file() or not key_file.is_file():
+                cert_file = self.resource_path(self.cert_file)
+                key_file = self.resource_path(self.key_file)
+
             self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            self.ssl_context.load_cert_chain(self.resource_path(self.cert_file), self.resource_path(self.key_file))
+            self.ssl_context.load_cert_chain(cert_file, key_file)
+
         except Exception as e:
             logging.error(f"Ошибка загрузки TLS сертификата: {e}")
             self.tls_enabled = False
