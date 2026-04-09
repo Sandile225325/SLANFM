@@ -1,0 +1,555 @@
+import socket
+import threading
+import os
+import json
+import hashlib
+from pathlib import Path
+import logging
+import struct
+import sys
+import ssl
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+class FileServer:
+    def __init__(self, host='0.0.0.0', port=6666, upload_dir='server_files', config_path='server_config.json'):
+        self.host = host
+        self.port = port
+        self.upload_dir = Path(upload_dir)
+        self.upload_dir.mkdir(exist_ok=True)
+        self.clients = {}
+        self.lock = threading.Lock()
+        self.server = None
+        self.max_file_size = 2 * 1024 * 1024 * 1024
+        self.chunk_size = 65536
+        self.timeout = 120
+        self.can_clients_delete_files = True
+        self.auth_token = None
+        self.tls_enabled = False
+        self.cert_file = None
+        self.key_file = None
+        self.ssl_context = None
+
+        if config_path:
+            self.load_config(config_path)
+            if self.tls_enabled:
+                self.setup_tls()
+
+    def resource_path(self, relative_path):
+        try:
+            base_path = Path(sys._MEIPASS)
+        except AttributeError:
+            base_path = Path(__file__).parent
+        return base_path / relative_path
+
+    def load_config(self, config_path):
+        try:
+            config_file = Path(config_path)
+            if not config_file.is_file():
+                config_file = self.resource_path(config_path)
+                if not config_file.is_file():
+                    logging.warning(f"Файл конфигурации {config_path} не найден. Используются значения по умолчанию.")
+                    return
+                
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+
+            if 'host' in config:
+                new_host = config['host']
+                if isinstance(new_host, str) and new_host.strip() != "":
+                    self.host = new_host
+                else:
+                    logging.warning(f"Некорректный хост в конфиге: {new_host}. Используется значение {self.host}")
+
+            if 'port' in config:
+                new_port = config['port']
+                if isinstance(new_port, int) and 1 <= new_port <= 65535:
+                    self.port = new_port
+                else:
+                    logging.warning(f"Некорректный порт в конфиге: {new_port}. Используется значение {self.port}")
+
+            if 'upload_dir' in config:
+                base_dir = Path.cwd()
+                try:
+                    configured_path = Path(config['upload_dir'])
+                    if not configured_path.is_absolute():
+                        configured_path = base_dir / configured_path
+                    resolved_path = configured_path.resolve()
+                    if base_dir.resolve() in resolved_path.parents or resolved_path == base_dir.resolve():
+                        self.upload_dir = resolved_path
+                        self.upload_dir.mkdir(exist_ok=True)
+                    else:
+                        logging.error(f"Ошибка при настройке загрузочной папки. Используется {self.upload_dir}")
+                except Exception:
+                    logging.error(f"Ошибка при настройке загрузочной папки. Используется {self.upload_dir}")
+
+            if 'max_file_size' in config:
+                new_max_size = config['max_file_size']
+                if isinstance(new_max_size, int) and new_max_size > 0:
+                    self.max_file_size = new_max_size
+                else:
+                    logging.warning(f"Некорректный max_file_size в конфиге: {new_max_size}. Используется значение {self.max_file_size}")
+
+            if 'chunk_size' in config:
+                new_chunk = config['chunk_size']
+                if isinstance(new_chunk, int) and new_chunk > 0:
+                    self.chunk_size = new_chunk
+                else:
+                    logging.warning(f"Некорректный chunk_size в конфиге: {new_chunk}. Используется значение {self.chunk_size}")
+
+            if 'timeout' in config:
+                new_timeout = config['timeout']
+                if isinstance(new_timeout, int) and new_timeout > 0:
+                    self.timeout = new_timeout
+                else:
+                    logging.warning(f"Некорректный timeout в конфиге: {new_timeout}. Используется значение {self.timeout}")
+
+            if 'can_clients_delete_files' in config:
+                can_clients_delete_files = config['can_clients_delete_files']
+                if isinstance(can_clients_delete_files, bool):
+                    self.can_clients_delete_files = can_clients_delete_files
+                else:
+                    logging.warning(f"Некорректный can_clients_delete_files в конфиге: {can_clients_delete_files}. Используется значение {self.can_clients_delete_files}")
+
+            if 'auth_token' in config:
+                auth_token = config['auth_token']
+                if isinstance(auth_token, str):
+                    self.auth_token = auth_token
+                else:
+                    logging.warning(f"Некорректный auth_token в конфиге: {auth_token}. Аутентификация для клиентов не требуется")
+
+            if 'tls_enabled' in config:
+                tls_enabled = config['tls_enabled']
+                if isinstance(tls_enabled, bool):
+                    self.tls_enabled = tls_enabled
+                else:
+                    logging.warning(f"Некорректный tls_enabled в конфиге: {tls_enabled}. Используется значение {self.tls_enabled}")
+
+            if 'cert_file' in config:
+                if self.tls_enabled:
+                    cert_file = config['cert_file']
+                    if isinstance(cert_file, str):
+                        self.cert_file = cert_file
+                    else:
+                        logging.warning(f"Некорректный cert_file в конфиге: {cert_file}. Используется значение {self.cert_file}")
+
+            if 'key_file' in config:
+                if self.tls_enabled:
+                    key_file = config['key_file']
+                    if isinstance(key_file, str):
+                        self.key_file = key_file
+                    else:
+                        logging.warning(f"Некорректный key_file в конфиге: {key_file}. Используется значение {self.key_file}")
+
+            logging.info(f"Конфигурация загружена из {config_path}")
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Ошибка парсинга JSON в конфигурации {config_path}: {e}")
+        except Exception as e:
+            logging.error(f"Ошибка загрузки конфигурации: {e}")
+
+    def setup_tls(self):
+        try:
+            cert_file = Path(self.cert_file)
+            key_file = Path(self.key_file)
+            if not cert_file.is_file() or not key_file.is_file():
+                cert_file = self.resource_path(self.cert_file)
+                key_file = self.resource_path(self.key_file)
+
+            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ssl_context.load_cert_chain(cert_file, key_file)
+
+        except Exception as e:
+            logging.error(f"Ошибка загрузки TLS сертификата: {e}")
+            self.tls_enabled = False
+            raise
+
+    def start(self):
+        if not self.is_port_available():
+            logging.error(f"Порт {self.port} уже занят!\nНажмите enter для выхода...")
+            input()
+            return
+
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind((self.host, self.port))
+        self.server.listen(5)
+
+        auth_required = 'включена' if self.auth_token else 'не требуется'
+        tls_enabled = 'включён, сертификат и ключ загружены' if self.tls_enabled else 'выключен'
+        logging.info(f"Сервер запущен на {self.host}:{self.port}")
+        logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
+        logging.info(f"Аутентификация для пользователей {auth_required}")
+        logging.info(f"TLS {tls_enabled}")
+
+        try:
+            while True:
+                client_socket, address = self.server.accept()
+                client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                if self.tls_enabled and self.ssl_context:
+                    try:
+                        client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
+                    except ssl.SSLError as e:
+                        logging.error(f"Ошибка TLS-рукопожатия с {address}: {e}")
+                        client_socket.close()
+                        continue
+
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, address)
+                )
+                client_thread.daemon = True
+                client_thread.start()
+        except KeyboardInterrupt:
+            logging.info("Остановка сервера...")
+        finally:
+            if self.server:
+                self.server.close()
+
+    def is_port_available(self):
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.bind((self.host, self.port))
+            test_sock.close()
+            return True
+        except OSError as e:
+            logging.warning(f"Порт {self.port} недоступен.")
+            return False
+        
+    def is_safe_path(self, filename):
+        try:
+            user_path = Path(filename)
+            if user_path.is_absolute():
+                return False
+            requested_path = (self.upload_dir / user_path).resolve()
+            base_path = self.upload_dir.resolve()
+            return base_path == requested_path or base_path in requested_path.parents
+        except Exception:
+            return False
+
+    def handle_client(self, client_socket, address):
+        try:
+            self.send_response(client_socket, {
+                'type': 'init',
+                'chunk_size': self.chunk_size,
+                'max_file_size': self.max_file_size,
+                'timeout': self.timeout,
+                'auth_required': bool(self.auth_token)
+            })
+
+            if self.auth_token:
+                command_data = self.receive_all(client_socket, 4)
+                if not command_data or len(command_data) != 4:
+                    return
+
+                data_length = struct.unpack('>I', command_data)[0]
+                json_data = self.receive_all(client_socket, data_length)
+                if not json_data:
+                    return
+
+                try:
+                    command = json.loads(json_data.decode('utf-8'))
+                except UnicodeDecodeError:
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Ошибка декодирования'})
+                    return
+
+                if command.get('command') != 'auth':
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Требуется аутентификация'})
+                    return
+
+                token = command.get('token', '')
+                if token != self.auth_token:
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Неверный токен'})
+                    return
+
+                self.send_response(client_socket, {'status': 'success', 'message': 'Аутентификация успешна'})
+
+            while True:
+                try:
+                    command_data = self.receive_all(client_socket, 4)
+                    if not command_data or len(command_data) != 4:
+                        break
+
+                    data_length = struct.unpack('>I', command_data)[0]
+                    json_data = self.receive_all(client_socket, data_length)
+
+                    if not json_data:
+                        break
+
+                    try:
+                        command = json.loads(json_data.decode('utf-8'))
+                    except UnicodeDecodeError:
+                        logging.error(f"Ошибка декодирования JSON от {address}")
+                        break
+
+                    cmd = command.get('command')
+
+                    if cmd == 'list':
+                        self.send_file_list(client_socket)
+                    elif cmd == 'upload':
+                        self.receive_file(client_socket, command)
+                    elif cmd == 'download':
+                        self.send_file(client_socket, command)
+                    elif cmd == 'delete':
+                        self.delete_file(client_socket, command)
+                    elif cmd == 'info':
+                        self.send_server_info(client_socket)
+                    elif cmd == 'disconnect':
+                        break
+                    else:
+                        self.send_response(client_socket, {'status': 'error', 'message': 'Неизвестная команда'})
+                except Exception as e:
+                    logging.error(f"Ошибка с клиентом {address}: {e}", exc_info=True)
+                    break
+
+        except Exception as e:
+            logging.error(f"Ошибка с клиентом {address}: {e}", exc_info=True)
+        finally:
+            try:
+                client_socket.close()
+            except:
+                pass
+
+    def send_file_list(self, client_socket):
+        try:
+            files = []
+            for f in self.upload_dir.iterdir():
+                if f.is_file():
+                    files.append({
+                        'name': f.name,
+                        'size': f.stat().st_size,
+                        'modified': f.stat().st_mtime
+                    })
+
+            response = {
+                'status': 'success',
+                'files': files
+            }
+            self.send_response(client_socket, response)
+        except Exception as e:
+            self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+
+    def send_file(self, client_socket, command):
+        try:
+            filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
+            filepath = self.upload_dir / filename
+
+            if not filepath.exists():
+                self.send_response(client_socket, {'status': 'error', 'message': 'Файл не найден'})
+                return
+
+            file_size = filepath.stat().st_size
+
+            md5_hash = hashlib.md5()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    md5_hash.update(chunk)
+
+            self.send_response(client_socket, {
+                'status': 'success',
+                'size': file_size,
+                'filename': filename,
+                'md5': md5_hash.hexdigest()
+            })
+
+            response = self.receive_response(client_socket)
+            if not response or response.get('status') != 'ready':
+                logging.error("Клиент не подтвердил готовность к приему файла")
+                return
+
+            sent_total = 0
+            with open(filepath, 'rb') as f:
+                while True:
+                    chunk = f.read(self.chunk_size)
+                    if not chunk:
+                        break
+
+                    try:
+                        client_socket.sendall(struct.pack('>I', len(chunk)))
+                        client_socket.sendall(chunk)
+                    except (ConnectionError, BrokenPipeError):
+                        logging.error("Соединение разорвано при отправке файла")
+                        return
+
+                    sent_total += len(chunk)
+
+                    if sent_total % (10 * 1024 * 1024) < self.chunk_size:
+                        percent = (sent_total / file_size) * 100
+                        logging.info(f"Отправка {filename}: {percent:.1f}% ({sent_total}/{file_size} байт)")
+
+            logging.info(f"Файл {filename} отправлен клиенту ({file_size} байт)")
+
+        except Exception as e:
+            logging.error(f"Ошибка отправки файла: {e}", exc_info=True)
+            try:
+                self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+            except:
+                pass
+
+    def receive_file(self, client_socket, command):
+        try:
+            filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
+            file_size = int(command['size'])
+
+            if file_size > self.max_file_size:
+                self.send_response(client_socket, {'status': 'error', 'message': 'Файл слишком большой'})
+                return
+
+            filepath = self.upload_dir / filename
+
+            self.send_response(client_socket, {'status': 'ready'})
+
+            received = 0
+            with open(filepath, 'wb') as f:
+                while received < file_size:
+                    try:
+                        chunk_size_data = self.receive_all(client_socket, 4)
+                        if not chunk_size_data or len(chunk_size_data) != 4:
+                            raise ConnectionError("Не удалось получить размер чанка")
+
+                        chunk_size = struct.unpack('>I', chunk_size_data)[0]
+
+                        if chunk_size > self.chunk_size:
+                            raise ValueError(f"Размер чанка {chunk_size} превышает максимально допустимый {self.chunk_size}")
+
+                        remaining = file_size - received
+
+                        if chunk_size > remaining:
+                            raise ValueError(f"Размер чанка {chunk_size} превышает оставшийся размер файла {remaining}")
+
+                        chunk = self.receive_all(client_socket, chunk_size)
+                        if not chunk or len(chunk) != chunk_size:
+                            raise ConnectionError(f"Не удалось получить чанк: ожидалось {chunk_size}, получено {len(chunk) if chunk else 0}")
+
+                        f.write(chunk)
+                        received += len(chunk)
+
+                        if received % (10 * 1024 * 1024) < self.chunk_size:
+                            percent = (received / file_size) * 100
+                            logging.info(f"Прием {filename}: {percent:.1f}% ({received}/{file_size} байт)")
+
+                    except (ConnectionError, socket.timeout, struct.error, ValueError) as e:
+                        logging.error(f"Ошибка приема чанка: {e}")
+                        raise
+
+            if received == file_size:
+                md5_hash = hashlib.md5()
+                with open(filepath, 'rb') as f:
+                    for chunk in iter(lambda: f.read(8192), b''):
+                        md5_hash.update(chunk)
+
+                self.send_response(client_socket, {
+                    'status': 'success',
+                    'message': 'Файл загружен',
+                    'md5': md5_hash.hexdigest()
+                })
+                logging.info(f"Файл {filename} успешно загружен на сервер ({file_size} байт)")
+            else:
+                if filepath.exists():
+                    os.remove(filepath)
+                self.send_response(client_socket, {
+                    'status': 'error',
+                    'message': f'Неполная загрузка файла: получено {received} из {file_size} байт'
+                })
+
+        except Exception as e:
+            filename = command['filename']
+            filepath = self.upload_dir / filename
+            if 'filepath' in locals() and filepath.exists():
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+            logging.error(f"Ошибка приема файла: {e}", exc_info=True)
+            try:
+                self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+            except:
+                pass
+
+    def delete_file(self, client_socket, command):
+        if not self.can_clients_delete_files:
+            self.send_response(client_socket, {'status': 'error', 'message': 'Недостаточно прав'})
+            return
+
+        try:
+            filename = command['filename']
+            if not self.is_safe_path(filename):
+                self.send_response(client_socket, {'status': 'error', 'message': 'Некорректное имя файла'})
+                return
+            filepath = self.upload_dir / filename
+
+            if filepath.exists():
+                filepath.unlink()
+                self.send_response(client_socket, {'status': 'success', 'message': 'Файл удален'})
+                logging.info(f"Файл {filename} удалён с сервера")
+            else:
+                self.send_response(client_socket, {'status': 'error', 'message': 'Файл не найден'})
+        except Exception as e:
+            self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+
+    def send_server_info(self, client_socket):
+        try:
+            total_size = 0
+            total_files = 0
+            for f in self.upload_dir.iterdir():
+                if f.is_file():
+                    total_files += 1
+                    total_size += f.stat().st_size
+
+            info = {
+                'status': 'success',
+                'info': {
+                    'upload_dir': str(self.upload_dir.absolute()),
+                    'total_files': total_files,
+                    'total_size': total_size
+                }
+            }
+            self.send_response(client_socket, info)
+        except Exception as e:
+            self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+
+    def receive_all(self, sock, length):
+        data = b''
+        while len(data) < length:
+            chunk = sock.recv(min(4096, length - len(data)))
+            if not chunk:
+                break
+            data += chunk
+        return data
+
+    def receive_response(self, sock):
+        try:
+            length_data = self.receive_all(sock, 4)
+            if not length_data or len(length_data) != 4:
+                return None
+
+            data_length = struct.unpack('>I', length_data)[0]
+            json_data = self.receive_all(sock, data_length)
+
+            if not json_data:
+                return None
+
+            return json.loads(json_data.decode('utf-8'))
+        except:
+            return None
+
+    def send_response(self, sock, data):
+        try:
+            json_data = json.dumps(data).encode('utf-8')
+            sock.sendall(len(json_data).to_bytes(4, 'big'))
+            sock.sendall(json_data)
+        except:
+            pass
+
+
+if __name__ == "__main__":
+    server = FileServer()
+    server.start()
