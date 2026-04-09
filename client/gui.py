@@ -29,7 +29,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
         
-        self.version = '1.5.0'
+        self.version = '1.5.1'
 
         self.config_file = "config.json"
         self.config = self.load_config()
