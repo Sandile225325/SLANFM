@@ -1,6 +1,6 @@
 # SLANFM
 
-Простое клиент-серверное приложение для передачи файлов по локальной сети.
+**Простое клиент-серверное приложение для передачи файлов по локальной сети.**
 
 ## Установка и запуск
 
@@ -74,7 +74,7 @@
 
 **Если значение `auth_token` пустое, аутентификация не требуется.**
 
-**Если значение `tls_enabled` = `false`, параметры `cert_file` и `key_file` игнорируются.**
+**Если значение `tls_enabled` = `false`, параметры `cert_file` и `key_file` игнорируются**
 
 ### Клиент
 
@@ -123,7 +123,7 @@
 openssl req -x509 -newkey rsa:4096 -keyout private_key.key -out certificate.crt -days 3650 -nodes -subj "/CN=SLANFM"
 ```
 
-После выполнения появятся файлы private_key.key и certificate.crt.
+После выполнения появятся файлы **`private_key.key`** и **`certificate.crt`**.
 
 ## Использование
 
@@ -141,3 +141,12 @@ openssl req -x509 -newkey rsa:4096 -keyout private_key.key -out certificate.crt 
 `Скачать с сервера` — выбрать файл в списке и сохранить его;    
 `Удалить с сервера` — удалить выбранный файл (если разрешено на сервере);   
 `?` — отображает информацию о версии, подключении, параметрах сервера или допустимых диапазонах.    
+
+## Скриншоты
+
+![client](./screenshots/client.png)
+![server](./screenshots/server.png)
+
+## Лицензия
+
+[Apache-2.0 license](https://github.com/Sandile225325/SLANFM/blob/main/LICENSE)
