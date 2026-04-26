@@ -7,7 +7,7 @@
     "timeout": 120,
     "can_clients_delete_files": true,
     "auth_token": "",
-    "tls_enabled": true,
+    "tls_enabled": false,
     "cert_file": "certificate.crt",
     "key_file": "private_key.key"
 }
