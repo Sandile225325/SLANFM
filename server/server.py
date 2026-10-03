@@ -8,6 +8,7 @@ import logging
 import struct
 import sys
 import ssl
+import shutil
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -402,6 +403,14 @@ class FileServer:
             if file_size > self.max_file_size:
                 self.send_response(client_socket, {'status': 'error', 'message': 'Файл слишком большой'})
                 return
+            
+            try:
+                usage = shutil.disk_usage(self.upload_dir)
+                if usage.free < file_size * 1.1:
+                    self.send_response(client_socket, {'status': 'error', 'message': 'На сервере недостаточно свободного места'})
+                    return
+            except OSError:
+                pass
 
             filepath = self.upload_dir / filename
 

@@ -9,6 +9,7 @@ import json
 import queue
 from pathlib import Path
 import sys
+import shutil
 
 
 class FileManagerGUI:
@@ -29,7 +30,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
         
-        self.version = '1.5.1'
+        self.version = '1.6.0'
 
         self.config_file = "config.json"
         self.config = self.load_config()
@@ -45,8 +46,8 @@ class FileManagerGUI:
         self.create_widgets()
         self.start_progress_monitor()
 
-        self.download_dir = Path('downloads')
-        self.download_dir.mkdir(exist_ok=True)
+        self.download_dir = self.resolve_download_dir()
+        self.download_dir.mkdir(parents=True, exist_ok=True)
 
         self.files_tree.bind('<<TreeviewSelect>>', self.on_file_selection_changed)
 
@@ -77,9 +78,14 @@ class FileManagerGUI:
                         filepath = message['ask_overwrite_local']
                         answer = messagebox.askyesno(
                             "Файл существует",
-                            f'Локальный файл "{filepath}" уже существует.\nПерезаписать?'
+                            f'У вас уже существует файл "{filepath}".\nПерезаписать?'
                         )
                         self.user_response_queue.put('yes' if answer else 'no')
+                    if 'not_enough_space' in message:
+                        answer = messagebox.showerror(
+                            "Мало места",
+                            f'На диске не хватает места для сохранения файла.'
+                        )
                 elif isinstance(message, str):
                     self.status_text.set(message)
         except queue.Empty:
@@ -107,15 +113,29 @@ class FileManagerGUI:
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
             return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""}}
+                    "input_save_config": {"host": ""},
+                    "paths_config": {"downloads_dir": "downloads"}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
             return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""}}
+                    "input_save_config": {"host": ""},
+                    "paths_config": {"downloads_dir": "downloads"}}
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка загрузки конфига: {e}")
             return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""}}
+                    "input_save_config": {"host": ""},
+                    "paths_config": {"downloads_dir": "downloads"}}
+        
+    def resolve_download_dir(self):
+        raw = self.config.get("paths_config", {}).get("download_dir", "downloads")
+        path = Path(raw)
+        if not path.is_absolute():
+            if getattr(sys, 'frozen', False):
+                base = Path(sys.executable).parent
+            else:
+                base = Path.cwd()
+            path = base / path
+        return path.resolve()
 
     def create_widgets(self):
         connect_frame = ttk.LabelFrame(self.root, text="Подключение к серверу", padding=10)
@@ -357,6 +377,17 @@ class FileManagerGUI:
             self.ip = None
             self.port = None
 
+    def enough_disk_space(self, path, required_space):
+        try:
+            usage = shutil.disk_usage(path)
+            if usage.free < required_space * 1.1:
+                return False
+            return True
+
+        except Exception:
+            messagebox.showerror("Ошибка", "Не удалось проверить количество свободного места")
+            return True
+
     def refresh_files(self, dont_reset_progress=False):
         if not self.client:
             messagebox.showwarning("Предупреждение", "Сначала подключитесь к серверу")
@@ -386,10 +417,12 @@ class FileManagerGUI:
                     error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
                     self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                     self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Не удалось получить список файлов: {msg}"))
+
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка при получении списка файлов: {msg}"))
+
             finally:
                 self.operation_in_progress = False
 
@@ -480,19 +513,22 @@ class FileManagerGUI:
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Загрузка: {percent:.1f}%'})
 
-                success = self.client.upload_file(filepath, update_progress)
+                result = self.client.upload_file(filepath, update_progress)
 
-                if success:
+                if result is True:
                     self.progress_queue.put({'percent': 100, 'status': 'Файл успешно загружен'})
                     self.root.after(0, lambda: messagebox.showinfo("Успех", "Файл успешно загружен на сервер"))
                     operation_success = True
                 else:
-                    self.progress_queue.put({'status': 'Ошибка загрузки файла'})
-                    self.root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось загрузить файл на сервер"))
+                    self.progress_queue.put({'status': f'Ошибка: {result}'})
+                    self.root.after(0, lambda msg=result: messagebox.showerror(
+                        "Ошибка", f"Не удалось загрузить файл:\n{msg}"))
+
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка загрузки: {msg}"))
+
             finally:
                 self.operation_in_progress = False
                 if operation_success:
@@ -524,6 +560,14 @@ class FileManagerGUI:
                 filename = item['values'][0]
                 save_path = self.download_dir / os.path.basename(filename)
 
+                file_info = next((f for f in self.server_files if f['name'] == filename), None)
+                required_space = file_info['size'] if file_info else 0
+
+                if required_space and not self.enough_disk_space(str(self.download_dir), required_space):
+                    self.progress_queue.put({'status': 'Недостаточно места на диске'})
+                    self.root.after(0, lambda: messagebox.showerror("Недостаточно места", "На диске не хватает места для сохранения файла"))
+                    return
+
                 if save_path.exists():
                     self.progress_queue.put({'ask_overwrite_local': str(save_path)})
                     answer = self.user_response_queue.get()
@@ -536,22 +580,23 @@ class FileManagerGUI:
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Скачивание: {percent:.1f}%'})
 
-                success = self.client.download_file(filename, save_path, update_progress)
+                result = self.client.download_file(filename, save_path, update_progress)
 
-                if success:
+                if result is True:
                     self.progress_queue.put({'percent': 100, 'status': 'Файл успешно скачан'})
                     self.root.after(0, lambda f=filename, d=str(self.download_dir):
                     messagebox.showinfo("Успех", f"Файл {f} успешно скачан в папку {d}"))
                     operation_success = True
                 else:
-                    self.progress_queue.put({'status': 'Ошибка скачивания файла'})
-                    self.root.after(0, lambda f=filename:
-                    messagebox.showerror("Ошибка", f"Не удалось скачать файл {f}"))
+                    self.progress_queue.put({'status': f'Ошибка: {result}'})
+                    self.root.after(0, lambda msg=result, f=filename: messagebox.showerror("Ошибка", f"Не удалось скачать файл {f}:\n{msg}"))
+                    
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.root.after(0, lambda msg=error_msg:
                 messagebox.showerror("Ошибка", f"Ошибка скачивания: {msg}"))
+
             finally:
                 self.operation_in_progress = False
                 if operation_success:
@@ -696,6 +741,9 @@ class FileManagerGUI:
             Количество файлов на сервере: {self.total_number}
             Общий размер файлов на сервере: {total_size} {ts_unit}
 
+            Путь для сохранения файлов: 
+            {self.download_dir}
+
             Максимальный размер файла: {max_file_size} {mfs_unit}
             Размер чанка: {chunk_size} {chs_unit}
             Таймаут: {self.client.timeout} с
@@ -715,6 +763,9 @@ class FileManagerGUI:
             Версия: {self.version}
 
             Нет подключения к серверу
+
+            Путь для сохранения файлов: 
+            • {self.download_dir}
 
             Разрешённый диапазон размера чанка:
             • Минимум: {chunk_min_formatted}

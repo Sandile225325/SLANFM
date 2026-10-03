@@ -1,6 +1,8 @@
 {
   "connect_config": {
-    "PORT": "6666"
+    "PORT": "6666",
+    "non-tls_timeout": 10,
+    "tls_timeout": 20
   },
   "values_config": {
     "chunk_size_range": [
@@ -17,5 +19,8 @@
   },
   "authentication_config": {
     "token": ""
+  },
+  "paths_config": {
+    "downloads_dir": "downloads"
   }
 }

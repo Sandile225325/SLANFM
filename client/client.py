@@ -26,7 +26,7 @@ class FileClient:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            sock.settimeout(2.5)
+            sock.settimeout(self.config.get('connect_config', {}).get('non-tls_timeout', 2.5))
             sock.connect((self.server_host, self.server_port))
 
             original_socket = self.socket
@@ -42,7 +42,7 @@ class FileClient:
 
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                sock.settimeout(5)
+                sock.settimeout(self.config.get('connect_config', {}).get('tls_timeout', 5))
                 sock.connect((self.server_host, self.server_port))
 
                 context = ssl.create_default_context()
@@ -122,6 +122,10 @@ class FileClient:
                 return config
         except FileNotFoundError:
             return {
+                "connect_config": {
+                    "non-tls_timeout": 10,
+                    "tls_timeout": 20
+                },
                 "values_config": {
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
@@ -130,6 +134,10 @@ class FileClient:
             }
         except json.JSONDecodeError:
             return {
+                "connect_config": {
+                    "non-tls_timeout": 10,
+                    "tls_timeout": 20
+                },
                 "values_config": {
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
@@ -138,6 +146,10 @@ class FileClient:
             }
         except Exception:
             return {
+                "connect_config": {
+                    "non-tls_timeout": 10,
+                    "tls_timeout": 20
+                },
                 "values_config": {
                     "chunk_size_range": [1024, 10485760],
                     "timeout_range": [1, 300]
@@ -169,8 +181,7 @@ class FileClient:
         response = self.receive_response()
 
         if not response or response.get('status') != 'success':
-            error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
-            return False
+            return response.get('message', 'Неизвестная ошибка') if response else "Нет ответа от сервера"
 
         file_size = response['size']
         server_md5 = response.get('md5', '')
@@ -198,9 +209,6 @@ class FileClient:
                         percent = (received / file_size) * 100
                         progress_callback(percent)
 
-                    if file_size > 0:
-                        percent = (received / file_size) * 100
-
                 except socket.timeout:
                     break
                 except Exception:
@@ -222,23 +230,23 @@ class FileClient:
                 else:
                     if os.path.exists(save_path):
                         os.remove(save_path)
-                    return False
+                    return "MD5 шех скачанного файла не совпадает"
             return True
         else:
             if os.path.exists(save_path):
                 os.remove(save_path)
-            return False
+            return f"Неполная загрузка: получено {received} из {file_size} байт"
 
     def upload_file(self, filepath, progress_callback=None):
         path = Path(filepath)
 
         if not path.exists():
-            return False
+            return "Файл не найден"
 
         file_size = path.stat().st_size
 
         if file_size > self.max_file_size:
-            return False
+            return "Файл слишком большой"
 
         md5_hash = hashlib.md5()
         with open(path, 'rb') as f:
@@ -255,7 +263,7 @@ class FileClient:
         response = self.receive_response()
 
         if not response:
-            return False
+            return "Нет ответа от сервера"
 
         if response.get('status') == 'ready':
 
@@ -271,16 +279,13 @@ class FileClient:
                         self.socket.sendall(struct.pack('>I', chunk_size))
                         self.socket.sendall(chunk)
                     except (ConnectionError, BrokenPipeError):
-                        return False
+                        return "Соединение разорвано при отправке файла"
 
                     uploaded += len(chunk)
 
                     if progress_callback and file_size > 0:
                         percent = (uploaded / file_size) * 100
                         progress_callback(percent)
-
-                    if file_size > 0:
-                        percent = (uploaded / file_size) * 100
 
             response = self.receive_response()
             if response and response.get('status') == 'success':
@@ -289,14 +294,11 @@ class FileClient:
                     if progress_callback:
                         progress_callback(100)
                     return True
-                else:
-                    return False
+                return "MD5 хеш загруженного файла не совпадает"
             else:
-                error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
-                return False
+                return response.get('message', 'Неизвестная ошибка') if response else "Нет ответа от сервера"
         else:
-            error_msg = response.get('message', 'Неизвестная ошибка')
-            return False
+            return response.get('message', 'Неизвестная ошибка')
 
     def disconnect(self):
         if self.socket:
