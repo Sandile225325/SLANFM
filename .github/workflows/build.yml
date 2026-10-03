@@ -1,9 +1,12 @@
 name: SLANFM build and release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза'
+        required: true
+        default: ''
 
 jobs:
   build:
@@ -53,8 +56,6 @@ jobs:
 
           Write-Host "Copying files to $packageDir"
           Copy-Item "dist\SLANFM-client-windows.exe" "$packageDir\" -ErrorAction Stop
-          Copy-Item "client\icon.png" "$packageDir\" -ErrorAction Stop
-          Copy-Item "client\icon.ico" "$packageDir\" -ErrorAction Stop
           Copy-Item "client\config.json" "$packageDir\" -ErrorAction Stop
 
           Write-Host "Creating zip"
@@ -84,8 +85,8 @@ jobs:
           files: |
             dist/SLANFM-client-windows.zip
             dist/SLANFM-server-windows.zip
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
           draft: false
           prerelease: false
         env:
