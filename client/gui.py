@@ -81,11 +81,6 @@ class FileManagerGUI:
                             f'У вас уже существует файл "{filepath}".\nПерезаписать?'
                         )
                         self.user_response_queue.put('yes' if answer else 'no')
-                    if 'not_enough_space' in message:
-                        answer = messagebox.showerror(
-                            "Мало места",
-                            f'На диске не хватает места для сохранения файла.'
-                        )
                 elif isinstance(message, str):
                     self.status_text.set(message)
         except queue.Empty:
