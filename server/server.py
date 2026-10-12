@@ -166,6 +166,34 @@ class FileServer:
             self.tls_enabled = False
             raise
 
+    def enable_keepalive(self, sock, idle=60, interval=10, count=3):
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except OSError:
+            return
+
+        if sys.platform.startswith('win'):
+            try:
+                sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, idle * 1000, interval * 1000))
+                return
+            except (AttributeError, OSError):
+                return
+
+        keepidle = getattr(socket, 'TCP_KEEPIDLE', None)
+        if keepidle is None:
+            keepidle = getattr(socket, 'TCP_KEEPALIVE', None)
+
+        keepintvl = getattr(socket, 'TCP_KEEPINTVL', None)
+        keepcnt = getattr(socket, 'TCP_KEEPCNT', None)
+
+        for opt, value in ((keepidle, idle), (keepintvl, interval), (keepcnt, count)):
+            if opt is None:
+                continue
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, opt, value)
+            except OSError:
+                pass
+
     def start(self):
         if not self.is_port_available():
             logging.error(f"Порт {self.port} уже занят!\nНажмите enter для выхода...")
@@ -191,6 +219,8 @@ class FileServer:
                 except OSError as e:
                     logging.error(f"Ошибка accept: {e}")
                     continue
+
+                self.enable_keepalive(client_socket)
 
                 try:
                     client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -318,6 +348,8 @@ class FileServer:
 
                 self.send_response(client_socket, {'status': 'success', 'message': 'Аутентификация успешна'})
 
+            client_socket.settimeout(None)
+
             while True:
                 try:
                     command_data = self.receive_all(client_socket, 4)
@@ -339,15 +371,25 @@ class FileServer:
                     cmd = command.get('command')
 
                     if cmd == 'list':
+                        client_socket.settimeout(self.timeout)
                         self.send_file_list(client_socket)
+                        client_socket.settimeout(None)
                     elif cmd == 'upload':
+                        client_socket.settimeout(self.timeout)
                         self.receive_file(client_socket, command)
+                        client_socket.settimeout(None)
                     elif cmd == 'download':
+                        client_socket.settimeout(self.timeout)
                         self.send_file(client_socket, command)
+                        client_socket.settimeout(None)
                     elif cmd == 'delete':
+                        client_socket.settimeout(self.timeout)
                         self.delete_file(client_socket, command)
+                        client_socket.settimeout(None)
                     elif cmd == 'info':
+                        client_socket.settimeout(self.timeout)
                         self.send_server_info(client_socket)
+                        client_socket.settimeout(None)
                     elif cmd == 'disconnect':
                         break
                     else:
@@ -579,7 +621,12 @@ class FileServer:
     def receive_all(self, sock, length):
         data = b''
         while len(data) < length:
-            chunk = sock.recv(min(4096, length - len(data)))
+            try:
+                chunk = sock.recv(min(4096, length - len(data)))
+            except (socket.timeout, TimeoutError):
+                return data
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError):
+                return data
             if not chunk:
                 break
             data += chunk
