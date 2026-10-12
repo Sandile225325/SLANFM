@@ -34,7 +34,7 @@ class FileClient:
             init_response = self.receive_response()
             self.socket = original_socket
 
-            if init_response and init_response.get('type') == 'init':
+            if (init_response and init_response.get('type') == 'init' and not init_response.get('tls_required')):
                 self.socket = sock
                 self.tls_enabled = False
             else:

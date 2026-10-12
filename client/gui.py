@@ -29,8 +29,8 @@ class FileManagerGUI:
         self.connected = False
         self.ip = None
         self.port = None
-        
-        self.version = '1.6.0'
+
+        self.version = '1.6.1'
 
         self.config_file = "config.json"
         self.config = self.load_config()
@@ -53,6 +53,8 @@ class FileManagerGUI:
 
         self.total_size = 0
         self.total_number = 0
+
+        self.change_buttons_state('normal', force=True)
 
     def start_progress_monitor(self):
         self.check_progress_queue()
@@ -92,7 +94,7 @@ class FileManagerGUI:
         except AttributeError:
             base_path = Path(__file__).parent
         return base_path / relative_path
-    
+
     def config_path(self):
         if getattr(sys, 'frozen', False):
             base_path = Path(sys.executable).parent
@@ -120,7 +122,7 @@ class FileManagerGUI:
             return {"connect_config": {"PORT": "6666"},
                     "input_save_config": {"host": ""},
                     "paths_config": {"downloads_dir": "downloads"}}
-        
+
     def resolve_download_dir(self):
         raw = self.config.get("paths_config", {}).get("download_dir", "downloads")
         path = Path(raw)
@@ -141,10 +143,13 @@ class FileManagerGUI:
         self.server_ip.grid(row=0, column=1, padx=5)
         self.server_ip.insert(0, self.config.get("input_save_config", {}).get("host", ""))
 
-        ttk.Button(connect_frame, text="Подключиться",
-                   command=self.connect_server).grid(row=0, column=2, padx=5)
-        ttk.Button(connect_frame, text="Отключиться",
-                   command=self.disconnect_server).grid(row=0, column=3, padx=5)
+        self.connect_button = ttk.Button(connect_frame, text="Подключиться",
+                                         command=self.connect_server)
+        self.connect_button.grid(row=0, column=2, padx=5)
+
+        self.disconnect_button = ttk.Button(connect_frame, text="Отключиться",
+                                            command=self.disconnect_server)
+        self.disconnect_button.grid(row=0, column=3, padx=5)
 
         files_frame = ttk.LabelFrame(self.root, text="Файлы на сервере", padding=10)
         files_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -169,16 +174,25 @@ class FileManagerGUI:
         button_frame = ttk.Frame(self.root)
         button_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Button(button_frame, text="Обновить список",
-                   command=self.refresh_files).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Загрузить на сервер",
-                   command=self.upload_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Скачать с сервера",
-                   command=self.download_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Удалить с сервера",
-                   command=self.delete_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="?", width=3,
-                   command=self.show_about).pack(side=tk.RIGHT, padx=5)
+        self.refresh_button = ttk.Button(button_frame, text="Обновить список",
+                                         command=self.refresh_files)
+        self.refresh_button.pack(side=tk.LEFT, padx=5)
+
+        self.upload_button = ttk.Button(button_frame, text="Загрузить на сервер",
+                                        command=self.upload_file)
+        self.upload_button.pack(side=tk.LEFT, padx=5)
+
+        self.download_button = ttk.Button(button_frame, text="Скачать с сервера",
+                                          command=self.download_file)
+        self.download_button.pack(side=tk.LEFT, padx=5)
+
+        self.delete_button = ttk.Button(button_frame, text="Удалить с сервера",
+                                        command=self.delete_file)
+        self.delete_button.pack(side=tk.LEFT, padx=5)
+
+        self.about_button = ttk.Button(button_frame, text="?", width=3,
+                                       command=self.show_about)
+        self.about_button.pack(side=tk.RIGHT, padx=5)
 
         progress_frame = ttk.Frame(self.root)
         progress_frame.pack(fill="x", padx=10, pady=1)
@@ -262,6 +276,7 @@ class FileManagerGUI:
         if token:
 
             def auth_thread():
+                self.change_buttons_state('disabled')
                 try:
 
                     if self.client.authenticate(token):
@@ -284,6 +299,7 @@ class FileManagerGUI:
                 finally:
                     self.operation_in_progress = False
                     self.connect_operation = False
+                    self.change_buttons_state('normal')
 
             threading.Thread(target=auth_thread, daemon=True).start()
 
@@ -291,6 +307,7 @@ class FileManagerGUI:
             self.client.disconnect()
             self.operation_in_progress = False
             self.connect_operation = False
+            self.change_buttons_state('normal', force=True)
 
     def connect_server(self):
         if self.operation_in_progress:
@@ -312,6 +329,7 @@ class FileManagerGUI:
         def connect_thread():
             self.operation_in_progress = True
             self.connect_operation = True
+            self.change_buttons_state('disabled')
             success = False
             try:
                 self.progress_queue.put({'status': f'Подключение к {ip}:{port}...'})
@@ -350,6 +368,7 @@ class FileManagerGUI:
             finally:
                 self.operation_in_progress = False
                 self.connect_operation = False
+                self.change_buttons_state('normal')
                 if success:
                     self.root.after(0, self.refresh_files(True))
 
@@ -372,6 +391,8 @@ class FileManagerGUI:
             self.ip = None
             self.port = None
 
+        self.change_buttons_state('normal', force=True)
+
     def enough_disk_space(self, path, required_space):
         try:
             usage = shutil.disk_usage(path)
@@ -382,6 +403,20 @@ class FileManagerGUI:
         except Exception:
             messagebox.showerror("Ошибка", "Не удалось проверить количество свободного места")
             return True
+
+    def change_buttons_state(self, state, force=False):
+        if not force and self.operation_in_progress and state == 'normal':
+            return
+        try:
+            self.refresh_button.config(state=state)
+            self.upload_button.config(state=state)
+            self.download_button.config(state=state)
+            self.delete_button.config(state=state)
+            self.connect_button.config(state=state)
+            self.disconnect_button.config(state=state)
+
+        except Exception as e:
+            messagebox.showwarning("Предупреждение", str(e))
 
     def refresh_files(self, dont_reset_progress=False):
         if not self.client:
@@ -394,6 +429,7 @@ class FileManagerGUI:
 
         def refresh_thread():
             self.operation_in_progress = True
+            self.change_buttons_state('disabled')
             try:
                 self.progress_queue.put({'status': 'Получение списка файлов...'})
 
@@ -420,6 +456,7 @@ class FileManagerGUI:
 
             finally:
                 self.operation_in_progress = False
+                self.change_buttons_state('normal')
 
         threading.Thread(target=refresh_thread, daemon=True).start()
 
@@ -482,6 +519,7 @@ class FileManagerGUI:
 
         def upload_thread():
             self.operation_in_progress = True
+            self.change_buttons_state('disabled')
             operation_success = False
             try:
                 self.progress_queue.put({'status': 'Проверка наличия файла на сервере...'})
@@ -526,6 +564,7 @@ class FileManagerGUI:
 
             finally:
                 self.operation_in_progress = False
+                self.change_buttons_state('normal')
                 if operation_success:
                     self.root.after(0, self.refresh_files(True))
 
@@ -550,6 +589,7 @@ class FileManagerGUI:
 
         def download_thread():
             self.operation_in_progress = True
+            self.change_buttons_state('disabled')
             operation_success = False
             try:
                 filename = item['values'][0]
@@ -585,7 +625,7 @@ class FileManagerGUI:
                 else:
                     self.progress_queue.put({'status': f'Ошибка: {result}'})
                     self.root.after(0, lambda msg=result, f=filename: messagebox.showerror("Ошибка", f"Не удалось скачать файл {f}:\n{msg}"))
-                    
+
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
@@ -594,6 +634,7 @@ class FileManagerGUI:
 
             finally:
                 self.operation_in_progress = False
+                self.change_buttons_state('normal')
                 if operation_success:
                     self.root.after(0, self.refresh_files(True))
 
@@ -621,6 +662,7 @@ class FileManagerGUI:
 
         def delete_thread():
             self.operation_in_progress = True
+            self.change_buttons_state('disabled')
             operation_success = False
             try:
                 self.progress_queue.put({'status': f'Удаление файла {filename}...'})
@@ -644,6 +686,7 @@ class FileManagerGUI:
                 messagebox.showerror("Ошибка", f"Ошибка удаления: {msg}"))
             finally:
                 self.operation_in_progress = False
+                self.change_buttons_state('normal')
                 if operation_success:
                     self.root.after(0, self.refresh_files(True))
 
@@ -670,9 +713,9 @@ class FileManagerGUI:
             except (FileNotFoundError, json.JSONDecodeError):
                 data = {}
 
-            default_section="input_save_config"
+            default_section = "input_save_config"
             key = f"{default_section}.{key}"
-            
+
             keys = key.split('.')
             current = data
             for k in keys[:-1]:
@@ -683,10 +726,10 @@ class FileManagerGUI:
 
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-                
+
         except Exception:
             return
-        
+
     def show_about(self):
 
         def format_size(size_bytes):
@@ -700,13 +743,13 @@ class FileManagerGUI:
                 return size_bytes // (1024 ** 3), 'GB'
             else:
                 return size_bytes // (1024 ** 4), 'TB'
-            
+
         def format_total_size(size):
             if size > 1024:
                 return round(size / 1024, 2), 'GB'
             else:
                 return round(size), 'MB'
-            
+
         def format_range_value(value):
             if value < 1024:
                 return f"{value} B"
@@ -718,7 +761,7 @@ class FileManagerGUI:
                 return f"{value // (1024 ** 3)} GB"
             else:
                 return f"{value // (1024 ** 4)} TB"
-        
+
         if self.connected:
             self.update_files_list()
 
@@ -748,7 +791,7 @@ class FileManagerGUI:
             cfg = getattr(self, 'config', {}).get('values_config', {})
             chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
             timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
-            
+
             chunk_min_formatted = format_range_value(chunk_min)
             chunk_max_formatted = format_range_value(chunk_max)
 

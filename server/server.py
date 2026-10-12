@@ -186,23 +186,70 @@ class FileServer:
 
         try:
             while True:
-                client_socket, address = self.server.accept()
-                client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                try:
+                    client_socket, address = self.server.accept()
+                except OSError as e:
+                    logging.error(f"Ошибка accept: {e}")
+                    continue
+
+                try:
+                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError:
+                    try:
+                        client_socket.close()
+                    except Exception:
+                        pass
+                    continue
+
+                is_tls = False
 
                 if self.tls_enabled and self.ssl_context:
                     try:
-                        client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
-                    except ssl.SSLError as e:
-                        logging.error(f"Ошибка TLS-рукопожатия с {address}: {e}")
-                        client_socket.close()
+                        client_socket.settimeout(1.0)
+                        first_byte = client_socket.recv(1, socket.MSG_PEEK)
+                    except socket.timeout:
+                        first_byte = b''
+                    except (ConnectionResetError, OSError):
+                        try:
+                            client_socket.close()
+                        except Exception:
+                            pass
                         continue
 
-                client_thread = threading.Thread(
-                    target=self.handle_client,
-                    args=(client_socket, address)
-                )
-                client_thread.daemon = True
-                client_thread.start()
+                    if first_byte and first_byte[0] == 0x16:
+                        try:
+                            client_socket.settimeout(self.timeout)
+                            client_socket = self.ssl_context.wrap_socket(
+                                client_socket,
+                                server_side=True
+                            )
+                            is_tls = True
+                        except (ssl.SSLError, ConnectionResetError, OSError) as e:
+                            logging.warning(f"TLS-рукопожатие с {address} не удалось: {e}")
+                            try:
+                                client_socket.close()
+                            except Exception:
+                                pass
+                            continue
+                    else:
+                        client_socket.settimeout(self.timeout)
+                else:
+                    client_socket.settimeout(self.timeout)
+
+                try:
+                    client_thread = threading.Thread(
+                        target=self.handle_client,
+                        args=(client_socket, address, is_tls)
+                    )
+                    client_thread.daemon = True
+                    client_thread.start()
+                except Exception as e:
+                    logging.error(f"Не удалось запустить обработчик для {address}: {e}")
+                    try:
+                        client_socket.close()
+                    except Exception:
+                        pass
+
         except KeyboardInterrupt:
             logging.info("Остановка сервера...")
         finally:
@@ -230,15 +277,19 @@ class FileServer:
         except Exception:
             return False
 
-    def handle_client(self, client_socket, address):
+    def handle_client(self, client_socket, address, is_tls=False):
         try:
             self.send_response(client_socket, {
                 'type': 'init',
                 'chunk_size': self.chunk_size,
                 'max_file_size': self.max_file_size,
                 'timeout': self.timeout,
-                'auth_required': bool(self.auth_token)
+                'auth_required': bool(self.auth_token),
+                'tls_required': self.tls_enabled and not is_tls
             })
+
+            if self.tls_enabled and not is_tls:
+                return
 
             if self.auth_token:
                 command_data = self.receive_all(client_socket, 4)
