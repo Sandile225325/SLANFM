@@ -29,9 +29,8 @@ jobs:
       - name: Build SLANFM-client-windows
         shell: cmd
         run: |
-          pyinstaller --onefile --noconsole ^
+          pyinstaller --onefile --noconsole --noupx --clean ^
             --icon=client/icon.ico ^
-            --add-data "client/config.json;." ^
             --add-data "client/icon.png;." ^
             --add-data "client/icon.ico;." ^
             --name "SLANFM-client-windows" ^
@@ -40,9 +39,8 @@ jobs:
       - name: Build SLANFM-server-windows
         shell: cmd
         run: |
-          pyinstaller --onefile --console ^
+          pyinstaller --onefile --console --noupx --clean ^
             --icon=server/icon.ico ^
-            --add-data "server/server_config.json;." ^
             --name "SLANFM-server-windows" ^
             server/server.py
 
