@@ -21,6 +21,6 @@
     "token": ""
   },
   "paths_config": {
-    "downloads_dir": "downloads"
+    "download_dir": "downloads"
   }
 }
