@@ -1,6 +1,6 @@
 {
   "connect_config": {
-    "PORT": "6666",
+    "default_port": "6666",
     "non-tls_timeout": 10,
     "tls_timeout": 20
   },
@@ -15,7 +15,8 @@
     ]
   },
   "input_save_config": {
-    "host": ""
+    "ip": "",
+    "port": ""
   },
   "authentication_config": {
     "token": ""
