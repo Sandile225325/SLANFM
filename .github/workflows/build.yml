@@ -54,7 +54,7 @@ jobs:
 
           Write-Host "Copying files to $packageDir"
           Copy-Item "dist\SLANFM-client-windows.exe" "$packageDir\" -ErrorAction Stop
-          Copy-Item "client\config.json" "$packageDir\" -ErrorAction Stop
+          Copy-Item "client\client_config.json" "$packageDir\" -ErrorAction Stop
 
           Write-Host "Creating zip"
           Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\SLANFM-client-windows.zip" -Force
