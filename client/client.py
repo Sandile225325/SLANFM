@@ -112,50 +112,30 @@ class FileClient:
         return base_path / self.config_file
 
     def load_config(self):
+        default_values = {
+            "connect_config": {
+                "non-tls_timeout": 10,
+                "tls_timeout": 20
+            },
+            "values_config": {
+                "chunk_size_range": [1024, 10485760],
+                "timeout_range": [1, 300]
+            },
+            "authentication_config": {"token": ""}
+        }
+
         try:
             with open(self.config_path(), 'r', encoding='utf-8') as f:
                 config = json.load(f)               
-                if 'authentication' not in config:
-                    config['authentication_config'] = {'token': ''}
-                elif 'token' not in config['authentication_config']:
-                    config['authentication_config']['token'] = ''
+                config.setdefault('authentication_config', {})
+                config['authentication_config'].setdefault('token', '')
                 return config
         except FileNotFoundError:
-            return {
-                "connect_config": {
-                    "non-tls_timeout": 10,
-                    "tls_timeout": 20
-                },
-                "values_config": {
-                    "chunk_size_range": [1024, 10485760],
-                    "timeout_range": [1, 300]
-                },
-                "authentication_config": {"token": ""}
-            }
+            return default_values
         except json.JSONDecodeError:
-            return {
-                "connect_config": {
-                    "non-tls_timeout": 10,
-                    "tls_timeout": 20
-                },
-                "values_config": {
-                    "chunk_size_range": [1024, 10485760],
-                    "timeout_range": [1, 300]
-                },
-                "authentication_config": {"token": ""}
-            }
+            return default_values
         except Exception:
-            return {
-                "connect_config": {
-                    "non-tls_timeout": 10,
-                    "tls_timeout": 20
-                },
-                "values_config": {
-                    "chunk_size_range": [1024, 10485760],
-                    "timeout_range": [1, 300]
-                },
-                "authentication_config": {"token": ""}
-            }
+            return default_values
         
     def authenticate(self, token):
         self.send_command({

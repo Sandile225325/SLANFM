@@ -103,25 +103,25 @@ class FileManagerGUI:
         return base_path / self.config_file
 
     def load_config(self):
+        default_values = {
+            "connect_config": {"default_port": "6666"},
+            "input_save_config": {"ip": ""},
+            "paths_config": {"downloads_dir": "downloads"}
+        }
+
         try:
             config_path = self.config_path()
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"connect_config": {"default_port": "6666"},
-                    "input_save_config": {"ip": ""},
-                    "paths_config": {"downloads_dir": "downloads"}}
+            return default_values
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"connect_config": {"default_port": "6666"},
-                    "input_save_config": {"ip": ""},
-                    "paths_config": {"downloads_dir": "downloads"}}
+            return default_values
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка загрузки конфига: {e}")
-            return {"connect_config": {"default_port": "6666"},
-                    "input_save_config": {"ip": ""},
-                    "paths_config": {"downloads_dir": "downloads"}}
+            return default_values
 
     def resolve_download_dir(self):
         raw = self.config.get("paths_config", {}).get("download_dir", "downloads")
@@ -332,6 +332,8 @@ class FileManagerGUI:
         except ValueError:
             messagebox.showwarning("Внимание", f"Некорректный порт в конфигурации: {default_port_str}")
             return
+
+        self.clear_files_list()
 
         ip = user_input
         port = default_port
