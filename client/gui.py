@@ -30,9 +30,9 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
 
-        self.version = '1.6.2'
+        self.version = '1.6.3'
 
-        self.config_file = "config.json"
+        self.config_file = "client_config.json"
         self.config = self.load_config()
 
         self.sort_reverse = True
@@ -109,18 +109,18 @@ class FileManagerGUI:
                 return json.load(f)
         except FileNotFoundError:
             messagebox.showwarning("Внимание", f"Файл {self.config_file} не найден")
-            return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""},
+            return {"connect_config": {"default_port": "6666"},
+                    "input_save_config": {"ip": ""},
                     "paths_config": {"downloads_dir": "downloads"}}
         except json.JSONDecodeError:
             messagebox.showerror("Ошибка", "Некорректный формат JSON файла")
-            return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""},
+            return {"connect_config": {"default_port": "6666"},
+                    "input_save_config": {"ip": ""},
                     "paths_config": {"downloads_dir": "downloads"}}
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка загрузки конфига: {e}")
-            return {"connect_config": {"PORT": "6666"},
-                    "input_save_config": {"host": ""},
+            return {"connect_config": {"default_port": "6666"},
+                    "input_save_config": {"ip": ""},
                     "paths_config": {"downloads_dir": "downloads"}}
 
     def resolve_download_dir(self):
@@ -141,7 +141,14 @@ class FileManagerGUI:
         ttk.Label(connect_frame, text="IP сервера:").grid(row=0, column=0, padx=5)
         self.server_ip = ttk.Entry(connect_frame, width=20)
         self.server_ip.grid(row=0, column=1, padx=5)
-        self.server_ip.insert(0, self.config.get("input_save_config", {}).get("host", ""))
+        input_cfg = self.config.get("input_save_config", {})
+        saved_ip = input_cfg.get("ip", "")
+        saved_port = input_cfg.get("port", "")
+        if saved_ip:
+            if saved_port not in (None, ""):
+                self.server_ip.insert(0, f"{saved_ip}:{saved_port}")
+            else:
+                self.server_ip.insert(0, saved_ip)
 
         self.connect_button = ttk.Button(connect_frame, text="Подключиться",
                                          command=self.connect_server)
@@ -271,7 +278,7 @@ class FileManagerGUI:
             else:
                 heading['text'] = text
 
-    def authenticate(self, ip, port):
+    def authenticate(self, ip, port, explicit_port=False):
         token = simpledialog.askstring("Аутентификация", "Введите пароль:", parent=self.root)
         if token:
 
@@ -283,13 +290,13 @@ class FileManagerGUI:
                         self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
                         self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                         self.status_var.set(f"Подключено к {ip}:{port}")
-                        self.save_input(ip, "host")
+                        self.save_connection_info(ip, port, explicit_port)
                         self.connected = True
                         self.ip, self.port = ip, port
                         self.root.after(0, self.refresh_files(True))
 
                     else:
-                        messagebox.showerror("Ошибка", "Неверный токен")
+                        messagebox.showerror("Ошибка", "Неверный пароль")
                         self.disconnect_server()
 
                 except Exception as e:
@@ -315,13 +322,62 @@ class FileManagerGUI:
             return
 
         user_input = self.server_ip.get().strip()
-        ip = user_input
+        if not user_input:
+            messagebox.showwarning("Внимание", "Введите IP сервера")
+            return
 
-        port_str = self.config.get("connect_config", {}).get("PORT", "6666")
+        default_port_str = self.config.get("connect_config", {}).get("default_port", "6666")
         try:
-            port = int(port_str)
+            default_port = int(default_port_str)
         except ValueError:
-            messagebox.showwarning("Внимание", f"Некорректный порт в конфигурации: {port_str}")
+            messagebox.showwarning("Внимание", f"Некорректный порт в конфигурации: {default_port_str}")
+            return
+
+        ip = user_input
+        port = default_port
+        explicit_port = False
+
+        if user_input.startswith('['):
+            end = user_input.find(']')
+            if end == -1:
+                messagebox.showwarning("Внимание", "Некорректный адрес. Формат: [IPv6]:порт")
+                return
+
+            ip = user_input[1:end]
+            rest = user_input[end + 1:]
+
+            if rest.startswith(':'):
+                port_str = rest[1:].strip()
+                if not port_str:
+                    messagebox.showwarning("Внимание", "После ':' укажите порт")
+                    return
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    messagebox.showwarning("Внимание", f"Некорректный порт: {port_str}")
+                    return
+                explicit_port = True
+            elif rest:
+                messagebox.showwarning("Внимание", "Некорректный адрес. Формат: [IPv6]:порт")
+                return
+
+        elif user_input.count(':') == 1:
+            host_part, port_str = user_input.rsplit(':', 1)
+            if not host_part or not port_str:
+                messagebox.showwarning("Внимание", "Некорректный адрес. Формат: IP:порт")
+                return
+
+            try:
+                port = int(port_str)
+            except ValueError:
+                messagebox.showwarning("Внимание", f"Некорректный порт: {port_str}")
+                return
+
+            ip = host_part
+            explicit_port = True
+
+        if not (1 <= port <= 65535):
+            messagebox.showwarning("Внимание", f"Порт должен быть в диапазоне 1..65535")
             return
 
         self.client = FileClient(ip, port)
@@ -340,14 +396,14 @@ class FileManagerGUI:
                     self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                     self.status_var.set(f"Подключено к {ip}:{port}")
-                    self.save_input(ip, "host")
+                    self.save_connection_info(ip, port, explicit_port)
                     success = True
                     self.connected = True
                     self.ip, self.port = ip, port
 
                 elif connect_result == "need_auth":
                     self.progress_queue.put({'status': 'Требуется аутентификация'})
-                    self.root.after(0, lambda: self.authenticate(ip, port))
+                    self.root.after(0, lambda: self.authenticate(ip, port, explicit_port))
 
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
@@ -704,7 +760,7 @@ class FileManagerGUI:
             self.progress_var.set(0)
             self.status_text.set("Готово")
 
-    def save_input(self, input_str, key):
+    def save_config_value(self, key_path, value):
         try:
             config_path = self.config_path()
             try:
@@ -713,22 +769,28 @@ class FileManagerGUI:
             except (FileNotFoundError, json.JSONDecodeError):
                 data = {}
 
-            default_section = "input_save_config"
-            key = f"{default_section}.{key}"
-
-            keys = key.split('.')
+            keys = key_path.split('.')
             current = data
             for k in keys[:-1]:
-                if k not in current:
+                if k not in current or not isinstance(current[k], dict):
                     current[k] = {}
                 current = current[k]
-            current[keys[-1]] = input_str
+            current[keys[-1]] = value
 
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
+            self.config = data
+
         except Exception:
             return
+        
+    def save_connection_info(self, ip, port, explicit_port=True):
+        self.save_config_value("input_save_config.ip", str(ip))
+        if explicit_port:
+            self.save_config_value("input_save_config.port", str(port))
+        else:
+            self.save_config_value("input_save_config.port", "")
 
     def show_about(self):
 

@@ -18,7 +18,7 @@ class FileClient:
         self.chunk_size = 65536
         self.max_file_size = 2 * 1024 * 1024 * 1024
         self.timeout = 120
-        self.config_file = "config.json"
+        self.config_file = "client_config.json"
         self.config = self.load_config()
         self.auth_token = self.config.get('authentication_config', {}).get('token', '')
 
