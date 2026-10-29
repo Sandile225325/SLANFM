@@ -61,8 +61,8 @@ class FileClient:
                     return "Не удалось установить соединение с сервером"
 
             cfg = getattr(self, 'config', {}).get('values_config', {})
-            chunk_min, chunk_max = cfg.get('chunk_size_range', [1024, 10485760])
-            timeout_min, timeout_max = cfg.get('timeout_range', [1, 300])
+            chunk_min, chunk_max = min(cfg.get('chunk_size_range', [1024, 10485760])), max(cfg.get('chunk_size_range', [1024, 10485760]))
+            timeout_min, timeout_max = min(cfg.get('timeout_range', [1, 300])), max(cfg.get('timeout_range', [1, 300]))
             auth_required = init_response.get('auth_required', False)
 
             chunk_size = init_response['chunk_size']
