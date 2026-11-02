@@ -609,7 +609,6 @@ class FileServer:
             info = {
                 'status': 'success',
                 'info': {
-                    'upload_dir': str(self.upload_dir.absolute()),
                     'total_files': total_files,
                     'total_size': total_size
                 }
