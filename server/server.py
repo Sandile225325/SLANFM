@@ -9,6 +9,8 @@ import struct
 import sys
 import ssl
 import shutil
+import hmac
+import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -31,6 +33,19 @@ class FileServer:
         self.cert_file = None
         self.key_file = None
         self.ssl_context = None
+        self.max_json_size = 1024 * 1024
+        self.auth_rate_limit_enabled = True
+        self.auth_max_attempts = 5
+        self.auth_window = 300
+        self.auth_lockout = 900
+        self.auth_failure_delay = 0.3
+        self.auth_global_max_attempts = 50
+        self.auth_global_window = 300
+        self.auth_state = {}
+        self.auth_global_failures = []
+        self.auth_global_locked_until = 0.0
+        self.auth_lock = threading.Lock()
+        self.auth_last_cleanup = 0.0
 
         if config_path:
             self.load_config(config_path)
@@ -116,7 +131,8 @@ class FileServer:
             if 'auth_token' in config:
                 auth_token = config['auth_token']
                 if isinstance(auth_token, str):
-                    self.auth_token = auth_token
+                    stripped = auth_token.strip()
+                    self.auth_token = stripped if stripped else None
                 else:
                     logging.warning(f"Некорректный auth_token в конфиге: {auth_token}. Аутентификация для клиентов не требуется")
 
@@ -142,6 +158,33 @@ class FileServer:
                         self.key_file = key_file
                     else:
                         logging.warning(f"Некорректный key_file в конфиге: {key_file}. Используется значение {self.key_file}")
+
+            if 'max_json_size' in config:
+                max_json_size = config['max_json_size']
+                if isinstance(max_json_size, int) and 1024 <= max_json_size <= 64 * 1024 * 1024:
+                    self.max_json_size = max_json_size
+                else:
+                    logging.warning(f"Некорректный max_json_size: {max_json_size}. Используется {self.max_json_size}")
+
+            if 'auth_rate_limit' in config:
+                auth_rate_limit = config['auth_rate_limit']
+                if isinstance(auth_rate_limit, dict):
+                    if isinstance(auth_rate_limit.get('enabled'), bool):
+                        self.auth_rate_limit_enabled = auth_rate_limit['enabled']
+
+                    def _pos_int(key, default):
+                        v = auth_rate_limit.get(key)
+                        return v if isinstance(v, int) and v > 0 else default
+
+                    self.auth_max_attempts = _pos_int('max_attempts', self.auth_max_attempts)
+                    self.auth_window = _pos_int('window', self.auth_window)
+                    self.auth_lockout = _pos_int('lockout', self.auth_lockout)
+                    self.auth_global_max_attempts = _pos_int('global_max_attempts', self.auth_global_max_attempts)
+                    self.auth_global_window = _pos_int('global_window', self.auth_global_window)
+
+                    d = auth_rate_limit.get('failure_delay')
+                    if isinstance(d, (int, float)) and 0 <= d <= 10:
+                        self.auth_failure_delay = float(d)
 
             logging.info(f"Конфигурация загружена из {config_path}")
 
@@ -194,6 +237,90 @@ class FileServer:
             except OSError:
                 pass
 
+    def auth_retry_after(self, ip):
+        if not self.auth_rate_limit_enabled:
+            return 0
+        now = time.time()
+        with self.auth_lock:
+            e = self.auth_state.get(ip)
+            if e and e['locked_until'] > now:
+                return int(e['locked_until'] - now) + 1
+            if self.auth_global_locked_until > now:
+                return int(self.auth_global_locked_until - now) + 1
+            return 0
+
+    def auth_attempts_left(self, ip):
+        if not self.auth_rate_limit_enabled:
+            return 0
+        now = time.time()
+        with self.auth_lock:
+            e = self.auth_state.get(ip)
+            if not e:
+                return self.auth_max_attempts
+            failures = [t for t in e['failures'] if now - t <= self.auth_window]
+            return max(0, self.auth_max_attempts - len(failures))
+
+    def auth_record_failure(self, ip):
+        if not self.auth_rate_limit_enabled:
+            return 0
+        now = time.time()
+        with self.auth_lock:
+            e = self.auth_state.get(ip)
+            if e is None:
+                e = {'failures': [], 'locked_until': 0.0, 'last_seen': now}
+                self.auth_state[ip] = e
+            e['last_seen'] = now
+
+            e['failures'] = [t for t in e['failures'] if now - t <= self.auth_window]
+            e['failures'].append(now)
+
+            if len(e['failures']) >= self.auth_max_attempts:
+                e['locked_until'] = now + self.auth_lockout
+                e['failures'].clear()
+                logging.warning(
+                    f"IP {ip} заблокирован на {self.auth_lockout}с после "
+                    f"{self.auth_max_attempts} неудачных попыток аутентификации"
+                )
+                self.auth_cleanup(now)
+                return self.auth_lockout
+
+            self.auth_global_failures = [
+                t for t in self.auth_global_failures if now - t <= self.auth_global_window
+            ]
+            self.auth_global_failures.append(now)
+            if len(self.auth_global_failures) >= self.auth_global_max_attempts:
+                self.auth_global_locked_until = now + self.auth_lockout
+                logging.warning(
+                    f"Глобальная блокировка аутентификации на {self.auth_lockout}с "
+                    f"({self.auth_global_max_attempts} неудач за {self.auth_global_window}с)"
+                )
+                self.auth_global_failures.clear()
+                self.auth_cleanup(now)
+                return self.auth_lockout
+
+            self.auth_cleanup(now)
+            return 0
+
+    def auth_record_success(self, ip):
+        if not self.auth_rate_limit_enabled:
+            return
+        with self.auth_lock:
+            self.auth_state.pop(ip, None)
+
+    def auth_cleanup(self, now):
+        if now - self.auth_last_cleanup < 60:
+            return
+        self.auth_last_cleanup = now
+        to_remove = []
+        for ip, e in self.auth_state.items():
+            if e['locked_until'] > now:
+                continue
+            if e['failures'] and now - e['failures'][-1] <= self.auth_window:
+                continue
+            to_remove.append(ip)
+        for ip in to_remove:
+            del self.auth_state[ip]
+
     def start(self):
         if not self.is_port_available():
             logging.error(f"Порт {self.port} уже занят!\nНажмите enter для выхода...")
@@ -207,10 +334,12 @@ class FileServer:
 
         auth_required = 'включена' if self.auth_token else 'не требуется'
         tls_enabled = 'включён, сертификат и ключ загружены' if self.tls_enabled else 'выключен'
+        rate_limit_enabled = 'включена' if self.auth_token and self.auth_rate_limit_enabled else 'выключена'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
         logging.info(f"Аутентификация для пользователей {auth_required}")
         logging.info(f"TLS {tls_enabled}")
+        logging.info(f"Защита от брутфорса {rate_limit_enabled}")
 
         try:
             while True:
@@ -322,30 +451,83 @@ class FileServer:
                 return
 
             if self.auth_token:
+                client_ip = address[0]
+
+                retry_after = self.auth_retry_after(client_ip)
+                if retry_after > 0:
+                    self.send_response(client_socket, {
+                        'status': 'error',
+                        'message': f'Слишком много попыток аутентификации. '
+                                f'Повторите через {retry_after} с.',
+                        'retry_after': retry_after,
+                    })
+                    logging.warning(f"Аутентификация с {client_ip} отклонена: блокировка, "
+                                    f"осталось {retry_after}s")
+                    return
+
                 command_data = self.receive_all(client_socket, 4)
                 if not command_data or len(command_data) != 4:
                     return
 
                 data_length = struct.unpack('>I', command_data)[0]
+
+                if data_length > self.max_json_size:
+                    self.send_response(client_socket, {
+                        'status': 'error', 'message': 'Слишком большое сообщение',
+                    })
+                    self.auth_record_failure(client_ip)
+                    return
+
                 json_data = self.receive_all(client_socket, data_length)
-                if not json_data:
+                if not json_data or len(json_data) != data_length:
                     return
 
                 try:
                     command = json.loads(json_data.decode('utf-8'))
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, json.JSONDecodeError):
                     self.send_response(client_socket, {'status': 'error', 'message': 'Ошибка декодирования'})
+                    self.auth_record_failure(client_ip)
                     return
 
-                if command.get('command') != 'auth':
+                if not isinstance(command, dict) or command.get('command') != 'auth':
                     self.send_response(client_socket, {'status': 'error', 'message': 'Требуется аутентификация'})
+                    self.auth_record_failure(client_ip)
                     return
 
                 token = command.get('token', '')
-                if token != self.auth_token:
-                    self.send_response(client_socket, {'status': 'error', 'message': 'Неверный токен'})
+                if not isinstance(token, str):
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Неверный формат пароля'})
+                    self.auth_record_failure(client_ip)
                     return
 
+                token_ok = hmac.compare_digest(
+                    token.encode('utf-8'),
+                    self.auth_token.encode('utf-8'),
+                )
+
+                if not token_ok:
+                    lockout = self.auth_record_failure(client_ip)
+
+                    if self.auth_failure_delay > 0:
+                        time.sleep(self.auth_failure_delay)
+
+                    if lockout:
+                        self.send_response(client_socket, {
+                            'status': 'error',
+                            'message': f'Слишком много неверных попыток. Блокировка на {lockout} с.',
+                            'retry_after': lockout,
+                        })
+                    else:
+                        left = self.auth_attempts_left(client_ip)
+                        msg = 'Неверный пароль'
+                        if self.auth_rate_limit_enabled and left > 0:
+                            msg += f'. Осталось попыток: {left}'
+                        self.send_response(client_socket, {'status': 'error', 'message': msg})
+
+                    logging.warning(f"Неудачная аутентификация с {client_ip}")
+                    return
+
+                self.auth_record_success(client_ip)
                 self.send_response(client_socket, {'status': 'success', 'message': 'Аутентификация успешна'})
 
             client_socket.settimeout(None)
