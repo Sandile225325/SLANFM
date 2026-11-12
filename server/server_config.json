@@ -9,5 +9,13 @@
     "auth_token": "",
     "tls_enabled": false,
     "cert_file": "certificate.crt",
-    "key_file": "private_key.key"
+    "key_file": "private_key.key",
+    "max_json_size": 1048576,
+    "auth_rate_limit_enabled": true,
+    "auth_rate_limit_max_attempts": 5,
+    "auth_rate_limit_window": 300,
+    "auth_rate_limit_lockout": 900,
+    "auth_rate_limit_failure_delay": 0.3,
+    "auth_rate_limit_global_max_attempts": 50,
+    "auth_rate_limit_global_window": 300
 }
