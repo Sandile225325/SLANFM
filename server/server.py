@@ -166,25 +166,32 @@ class FileServer:
                 else:
                     logging.warning(f"Некорректный max_json_size: {max_json_size}. Используется {self.max_json_size}")
 
-            if 'auth_rate_limit' in config:
-                auth_rate_limit = config['auth_rate_limit']
-                if isinstance(auth_rate_limit, dict):
-                    if isinstance(auth_rate_limit.get('enabled'), bool):
-                        self.auth_rate_limit_enabled = auth_rate_limit['enabled']
+            if 'auth_rate_limit_enabled' in config:
+                auth_rate_limit_enabled = config['auth_rate_limit_enabled']
+                if isinstance(auth_rate_limit_enabled, bool):
+                    self.auth_rate_limit_enabled = auth_rate_limit_enabled
+                else:
+                    logging.warning(f"Некорректный auth_rate_limit_enabled: {auth_rate_limit_enabled}. Используется {self.auth_rate_limit_enabled}")
 
-                    def _pos_int(key, default):
-                        v = auth_rate_limit.get(key)
-                        return v if isinstance(v, int) and v > 0 else default
+            def _pos_int(key, default):
+                v = config.get(key)
+                if isinstance(v, int) and v > 0:
+                    return v
+                if key in config:
+                    logging.warning(f"Некорректный {key}: {v}. Используется {default}")
+                return default
 
-                    self.auth_max_attempts = _pos_int('max_attempts', self.auth_max_attempts)
-                    self.auth_window = _pos_int('window', self.auth_window)
-                    self.auth_lockout = _pos_int('lockout', self.auth_lockout)
-                    self.auth_global_max_attempts = _pos_int('global_max_attempts', self.auth_global_max_attempts)
-                    self.auth_global_window = _pos_int('global_window', self.auth_global_window)
+            self.auth_max_attempts = _pos_int('auth_rate_limit_max_attempts', self.auth_max_attempts)
+            self.auth_window = _pos_int('auth_rate_limit_window', self.auth_window)
+            self.auth_lockout = _pos_int('auth_rate_limit_lockout', self.auth_lockout)
+            self.auth_global_max_attempts = _pos_int('auth_rate_limit_global_max_attempts', self.auth_global_max_attempts)
+            self.auth_global_window = _pos_int('auth_rate_limit_global_window', self.auth_global_window)
 
-                    d = auth_rate_limit.get('failure_delay')
-                    if isinstance(d, (int, float)) and 0 <= d <= 10:
-                        self.auth_failure_delay = float(d)
+            auth_rate_limit_failure_delay = config.get('auth_rate_limit_failure_delay')
+            if isinstance(auth_rate_limit_failure_delay, (int, float)) and 0 <= auth_rate_limit_failure_delay <= 10:
+                self.auth_failure_delay = float(auth_rate_limit_failure_delay)
+            elif 'auth_rate_limit_failure_delay' in config:
+                logging.warning(f"Некорректный auth_rate_limit_failure_delay: {auth_rate_limit_failure_delay}. Используется {self.auth_failure_delay}")
 
             logging.info(f"Конфигурация загружена из {config_path}")
 
