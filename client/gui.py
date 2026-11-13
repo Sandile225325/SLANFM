@@ -286,7 +286,9 @@ class FileManagerGUI:
                 self.change_buttons_state('disabled')
                 try:
 
-                    if self.client.authenticate(token):
+                    result = self.client.authenticate(token)
+
+                    if result is True:
                         self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
                         self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
                         self.status_var.set(f"Подключено к {ip}:{port}")
@@ -295,8 +297,14 @@ class FileManagerGUI:
                         self.ip, self.port = ip, port
                         self.root.after(0, self.refresh_files(True))
 
+                    elif isinstance(result, dict):
+                        ra = result.get('retry_after', 0)
+                        self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
+                        self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Слишком много попыток, {msg}\nПовторите через {r} с."))
+                        self.disconnect_server()
+
                     else:
-                        messagebox.showerror("Ошибка", "Неверный пароль")
+                        self.root.after(0, lambda: messagebox.showerror("Ошибка", "Неверный пароль"))
                         self.disconnect_server()
 
                 except Exception as e:

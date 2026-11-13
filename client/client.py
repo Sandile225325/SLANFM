@@ -146,8 +146,12 @@ class FileClient:
         response = self.receive_response()
         if response and response.get('status') == 'success':
             return True
-        else:
-            return False
+        if response and response.get('retry_after'):
+            return {
+                'error': response.get('message', 'Заблокировано'),
+                'retry_after': int(response['retry_after']),
+            }
+        return False
 
     def download_file(self, filename, save_path=None, progress_callback=None):
         if not save_path:
