@@ -66,7 +66,7 @@
 | `auth_rate_limit_lockout`             | number  | Длительность блокировки IP в секундах после исчерпания попыток                                                  |
 | `auth_rate_limit_failure_delay`       | number  | Задержка в секундах перед ответом на неверный токен. Допустимый диапазон: `0`–`10`                              |
 | `auth_rate_limit_global_max_attempts` | number  | Глобальный лимит неудачных попыток со всех IP за `auth_rate_limit_global_window`                                |
-| `auth_rate_limit_global_window`       | number  | Окно глобального лимита в секундах                                                                              |     |
+| `auth_rate_limit_global_window`       | number  | Окно глобального лимита в секундах                                                                              |
 
 ### Клиент
 
