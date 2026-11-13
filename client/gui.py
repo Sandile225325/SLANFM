@@ -300,7 +300,7 @@ class FileManagerGUI:
                     elif isinstance(result, dict):
                         ra = result.get('retry_after', 0)
                         self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
-                        self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Слишком много попыток, {msg}\nПовторите через {r} с."))
+                        self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с."))
                         self.disconnect_server()
 
                     else:
@@ -308,7 +308,9 @@ class FileManagerGUI:
                         self.disconnect_server()
 
                 except Exception as e:
-                    messagebox.showerror("Ошибка", f"Ошибка аутентификации: {e}")
+                    error_msg = str(e)
+                    self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
+                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка аутентификации: {msg}"))
                     self.disconnect_server()
 
                 finally:
@@ -418,18 +420,18 @@ class FileManagerGUI:
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
                     self.client = None
-                    messagebox.showerror("Ошибка", connect_result)
+                    self.root.after(0, lambda msg=connect_result: messagebox.showerror("Ошибка", msg))
 
                 else:
                     self.progress_queue.put({'status': 'Ошибка подключения'})
                     self.client = None
-                    messagebox.showerror("Ошибка", "Ошибка подключения")
+                    self.root.after(0, lambda: messagebox.showerror("Ошибка", "Ошибка подключения"))
 
             except Exception as e:
                 error_msg = str(e)
                 self.progress_queue.put({'status': f'Ошибка: {error_msg}'})
                 self.client = None
-                messagebox.showerror("Ошибка", f"Ошибка: {error_msg}")
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"Ошибка: {msg}"))
 
             finally:
                 self.operation_in_progress = False
@@ -467,7 +469,7 @@ class FileManagerGUI:
             return True
 
         except Exception:
-            messagebox.showerror("Ошибка", "Не удалось проверить количество свободного места")
+            self.root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось проверить количество свободного места"))
             return True
 
     def change_buttons_state(self, state, force=False):
@@ -482,7 +484,11 @@ class FileManagerGUI:
             self.disconnect_button.config(state=state)
 
         except Exception as e:
-            messagebox.showwarning("Предупреждение", str(e))
+            error_msg = str(e)
+            try:
+                self.root.after(0, lambda msg=error_msg: messagebox.showwarning("Предупреждение", msg))
+            except Exception:
+                pass
 
     def refresh_files(self, dont_reset_progress=False):
         if not self.client:
@@ -620,8 +626,7 @@ class FileManagerGUI:
                     operation_success = True
                 else:
                     self.progress_queue.put({'status': f'Ошибка: {result}'})
-                    self.root.after(0, lambda msg=result: messagebox.showerror(
-                        "Ошибка", f"Не удалось загрузить файл:\n{msg}"))
+                    self.root.after(0, lambda msg=result: messagebox.showerror("Ошибка", f"Не удалось загрузить файл:\n{msg}"))
 
             except Exception as e:
                 error_msg = str(e)
@@ -666,7 +671,7 @@ class FileManagerGUI:
 
                 if required_space and not self.enough_disk_space(str(self.download_dir), required_space):
                     self.progress_queue.put({'status': 'Недостаточно места на диске'})
-                    self.root.after(0, lambda: messagebox.showerror("Недостаточно места", "На диске не хватает места для сохранения файла"))
+                    self.root.after(0, lambda: messagebox.showerror("Ошибка", "Недостаточно места для сохранения файла"))
                     return
 
                 if save_path.exists():
