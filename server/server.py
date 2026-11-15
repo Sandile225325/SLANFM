@@ -284,10 +284,7 @@ class FileServer:
             if len(e['failures']) >= self.auth_max_attempts:
                 e['locked_until'] = now + self.auth_lockout
                 e['failures'].clear()
-                logging.warning(
-                    f"IP {ip} заблокирован на {self.auth_lockout}с после "
-                    f"{self.auth_max_attempts} неудачных попыток аутентификации"
-                )
+                logging.warning(f"IP {ip} заблокирован на {self.auth_lockout}с после {self.auth_max_attempts} неудачных попыток аутентификации")
                 self.auth_cleanup(now)
                 return self.auth_lockout
 
@@ -297,10 +294,7 @@ class FileServer:
             self.auth_global_failures.append(now)
             if len(self.auth_global_failures) >= self.auth_global_max_attempts:
                 self.auth_global_locked_until = now + self.auth_lockout
-                logging.warning(
-                    f"Глобальная блокировка аутентификации на {self.auth_lockout}с "
-                    f"({self.auth_global_max_attempts} неудач за {self.auth_global_window}с)"
-                )
+                logging.warning(f"Глобальная блокировка аутентификации на {self.auth_lockout}с ({self.auth_global_max_attempts} неудач за {self.auth_global_window}с)")
                 self.auth_global_failures.clear()
                 self.auth_cleanup(now)
                 return self.auth_lockout
@@ -460,18 +454,6 @@ class FileServer:
             if self.auth_token:
                 client_ip = address[0]
 
-                retry_after = self.auth_retry_after(client_ip)
-                if retry_after > 0:
-                    self.send_response(client_socket, {
-                        'status': 'error',
-                        'message': f'Слишком много попыток аутентификации. '
-                                f'Повторите через {retry_after} с.',
-                        'retry_after': retry_after,
-                    })
-                    logging.warning(f"Аутентификация с {client_ip} отклонена: блокировка, "
-                                    f"осталось {retry_after}s")
-                    return
-
                 command_data = self.receive_all(client_socket, 4)
                 if not command_data or len(command_data) != 4:
                     return
@@ -494,6 +476,16 @@ class FileServer:
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self.send_response(client_socket, {'status': 'error', 'message': 'Ошибка декодирования'})
                     self.auth_record_failure(client_ip)
+                    return
+
+                retry_after = self.auth_retry_after(client_ip)
+                if retry_after > 0:
+                    self.send_response(client_socket, {
+                        'status': 'error',
+                        'message': f'Слишком много попыток аутентификации. Повторите через {retry_after} с.',
+                        'retry_after': retry_after,
+                    })
+                    logging.warning(f"Аутентификация с {client_ip} отклонена: блокировка, осталось {retry_after}с")
                     return
 
                 if not isinstance(command, dict) or command.get('command') != 'auth':

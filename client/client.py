@@ -86,8 +86,17 @@ class FileClient:
                 if self.auth_token:
                     self.send_command({'command': 'auth', 'token': self.auth_token})
                     auth_response = self.receive_response()
-                    if not auth_response or auth_response.get('status') != 'success':
+                    if auth_response is None:
                         self.socket.close()
+                        self.socket = None
+                        return "Соединение прервано сервером при аутентификации"
+                    if auth_response.get('status') != 'success':
+                        self.socket.close()
+                        if auth_response.get('retry_after'):
+                            return {
+                                'error': auth_response.get('message', 'Заблокировано'),
+                                'retry_after': int(auth_response['retry_after']),
+                            }
                         return "Ошибка аутентификации: неверный токен"
                 else:
                     return "need_auth"
@@ -144,9 +153,14 @@ class FileClient:
         })
 
         response = self.receive_response()
-        if response and response.get('status') == 'success':
+        if response is None:
+            return {
+                'error': 'Соединение прервано сервером (возможно, блокировка)',
+                'retry_after': 0,
+            }
+        if response.get('status') == 'success':
             return True
-        if response and response.get('retry_after'):
+        if response.get('retry_after'):
             return {
                 'error': response.get('message', 'Заблокировано'),
                 'retry_after': int(response['retry_after']),

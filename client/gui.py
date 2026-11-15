@@ -417,6 +417,13 @@ class FileManagerGUI:
                     self.progress_queue.put({'status': 'Требуется аутентификация'})
                     self.root.after(0, lambda: self.authenticate(ip, port, explicit_port))
 
+                elif isinstance(connect_result, dict):
+                    ra = int(connect_result.get('retry_after', 0) or 0)
+                    error_msg = connect_result.get('error', 'Заблокировано')
+                    self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
+                    self.client = None
+                    self.root.after(0, lambda msg=error_msg, r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с." if r else msg))
+
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
                     self.client = None
