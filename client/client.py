@@ -172,7 +172,7 @@ class FileClient:
             save_path = self.download_dir / filename
 
         save_path = Path(save_path)
-        temp_path = save_path.with_name(f'.{save_path.name}.part')
+        temp_path = save_path.with_name(f'.{save_path.name}.slanfm.part')
 
         self.send_command({
             'command': 'download',

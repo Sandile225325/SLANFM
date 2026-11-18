@@ -710,7 +710,7 @@ class FileServer:
             pass
 
         filepath = self.upload_dir / filename
-        tmp_fd, tmp_path_str = tempfile.mkstemp(prefix=f'{filename}.', suffix='.part', dir=self.temp_dir)
+        tmp_fd, tmp_path_str = tempfile.mkstemp(prefix=f'{filename}.', suffix='.slanfm.part', dir=self.temp_dir)
         os.close(tmp_fd)
         tmp_path = Path(tmp_path_str)
 

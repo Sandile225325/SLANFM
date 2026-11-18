@@ -30,7 +30,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
 
-        self.version = '1.7.0'
+        self.version = '1.7.1'
 
         self.config_file = "client_config.json"
         self.config = self.load_config()
@@ -55,6 +55,8 @@ class FileManagerGUI:
         self.total_number = 0
 
         self.change_buttons_state('normal', force=True)
+
+        self.cleanup_stale_parts()
 
     def start_progress_monitor(self):
         self.check_progress_queue()
@@ -277,6 +279,17 @@ class FileManagerGUI:
                 heading['text'] = f'{arrow} {text}'
             else:
                 heading['text'] = text
+
+    def cleanup_stale_parts(self):
+        try:
+            for f in self.download_dir.glob('.*.slanfm.part'):
+                if f.is_file():
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
     def authenticate(self, ip, port, explicit_port=False):
         token = simpledialog.askstring("Аутентификация", "Введите пароль:", parent=self.root)
@@ -672,6 +685,13 @@ class FileManagerGUI:
             try:
                 filename = item['values'][0]
                 save_path = self.download_dir / os.path.basename(filename)
+                temp_path = save_path.with_name(f'.{save_path.name}.slanfm.part')
+
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
 
                 file_info = next((f for f in self.server_files if f['name'] == filename), None)
                 required_space = file_info['size'] if file_info else 0
