@@ -171,6 +171,9 @@ class FileClient:
         if not save_path:
             save_path = self.download_dir / filename
 
+        save_path = Path(save_path)
+        temp_path = save_path.with_name(f'.{save_path.name}.part')
+
         self.send_command({
             'command': 'download',
             'filename': filename
@@ -187,53 +190,61 @@ class FileClient:
         self.send_command({'status': 'ready'})
 
         received = 0
-        with open(save_path, 'wb') as f:
-            while received < file_size:
-                try:
-                    chunk_size_data = self.receive_all(4)
-                    if not chunk_size_data or len(chunk_size_data) != 4:
-                        break
 
-                    chunk_size = struct.unpack('>I', chunk_size_data)[0]
+        try:
+            with open(temp_path, 'wb') as f:
+                while received < file_size:
+                    try:
+                        chunk_size_data = self.receive_all(4)
+                        if not chunk_size_data or len(chunk_size_data) != 4:
+                            return "Соединение разорвано при скачивании"
 
-                    chunk = self.receive_all(chunk_size)
-                    if not chunk or len(chunk) != chunk_size:
-                        break
+                        chunk_size = struct.unpack('>I', chunk_size_data)[0]
+                        chunk = self.receive_all(chunk_size)
+                        if not chunk or len(chunk) != chunk_size:
+                            return "Не удалось получить чанк"
 
-                    f.write(chunk)
-                    received += len(chunk)
+                        f.write(chunk)
+                        received += len(chunk)
 
-                    if progress_callback and file_size > 0:
-                        percent = (received / file_size) * 100
-                        progress_callback(percent)
+                        if progress_callback and file_size > 0:
+                            percent = (received / file_size) * 100
+                            progress_callback(percent)
+                    except socket.timeout:
+                        return "Таймаут при скачивании"
+                    except Exception:
+                        return "Ошибка приема данных"
 
-                except socket.timeout:
-                    break
-                except Exception:
-                    break
+            if received != file_size:
+                return "Неполная загрузка файла"
 
-        if received == file_size:
             if server_md5:
                 md5_hash = hashlib.md5()
-                with open(save_path, 'rb') as f:
+                with open(temp_path, 'rb') as f:
                     for chunk in iter(lambda: f.read(8192), b''):
                         md5_hash.update(chunk)
 
                 client_md5 = md5_hash.hexdigest()
+                if client_md5 != server_md5:
+                    return "MD5 хеш скачанного файла не совпадает"
 
-                if client_md5 == server_md5:
-                    if progress_callback:
-                        progress_callback(100)
-                    return True
-                else:
-                    if os.path.exists(save_path):
-                        os.remove(save_path)
-                    return "MD5 шех скачанного файла не совпадает"
+            try:
+                os.replace(temp_path, save_path)
+            except OSError:
+                return "Не удалось сохранить файл"
+
+            if progress_callback:
+                progress_callback(100)
             return True
-        else:
-            if os.path.exists(save_path):
-                os.remove(save_path)
-            return f"Неполная загрузка: получено {received} из {file_size} байт"
+
+        except Exception:
+            return "Ошибка скачивания"
+        finally:
+            if temp_path.exists():
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def upload_file(self, filepath, progress_callback=None):
         path = Path(filepath)
@@ -255,7 +266,8 @@ class FileClient:
         self.send_command({
             'command': 'upload',
             'filename': path.name,
-            'size': file_size
+            'size': file_size,
+            'md5': original_md5
         })
 
         response = self.receive_response()
