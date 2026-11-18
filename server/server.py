@@ -502,7 +502,7 @@ class FileServer:
                 if retry_after > 0:
                     self.send_response(client_socket, {
                         'status': 'error',
-                        'message': f'Слишком много попыток аутентификации. Повторите через {retry_after} с.',
+                        'message': f'Слишком много попыток аутентификации.',
                         'retry_after': retry_after,
                     })
                     logging.warning(f"Аутентификация с {client_ip} отклонена: блокировка, осталось {retry_after}с")
