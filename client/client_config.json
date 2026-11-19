@@ -23,5 +23,10 @@
   },
   "paths_config": {
     "download_dir": "downloads"
+  },
+  "status_bar_config": {
+    "status_bar": true,
+    "show_connection": true,
+    "show_rtt": true
   }
 }
