@@ -30,7 +30,7 @@ class FileManagerGUI:
         self.ip = None
         self.port = None
 
-        self.version = '1.7.1'
+        self.version = '1.8.0'
 
         self.config_file = "client_config.json"
         self.config = self.load_config()
@@ -47,7 +47,10 @@ class FileManagerGUI:
         self.start_progress_monitor()
 
         self.download_dir = self.resolve_download_dir()
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.download_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("Ошибка", "Не удалось создать папку для скачивания")
 
         self.files_tree.bind('<<TreeviewSelect>>', self.on_file_selection_changed)
 
@@ -108,7 +111,8 @@ class FileManagerGUI:
         default_values = {
             "connect_config": {"default_port": "6666"},
             "input_save_config": {"ip": ""},
-            "paths_config": {"downloads_dir": "downloads"}
+            "paths_config": {"download_dir": "downloads"},
+            "status_bar_config": {"status_bar": True, "show_connection": True, "show_rtt": True}
         }
 
         try:
@@ -212,10 +216,24 @@ class FileManagerGUI:
                                             mode='determinate')
         self.progress_bar.pack(fill="x", pady=5)
 
+        bar_cfg = self.config.get("status_bar_config", {})
+        self.show_connection = bool(bar_cfg.get("show_connection", True))
+        self.show_rtt = bool(bar_cfg.get("show_rtt", True))
+        self.status_bar_enabled = (
+            bool(bar_cfg.get("status_bar", True))
+            and (self.show_connection or self.show_rtt)
+        )
+
+        self.conn_status_value = "Не подключено"
+        self.rtt_status_value = None
+
         self.status_var = tk.StringVar()
-        self.status_var.set("Не подключено")
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_bar = None
+        if self.status_bar_enabled:
+            self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
+            self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.render_status_bar()
 
         try:
             img = Image.open(self.resource_path('icon.png'))
@@ -233,6 +251,28 @@ class FileManagerGUI:
 
         self.server_ip.bind('<Return>', self.connect_server_keyboard)
         self.server_ip.bind('<KP_Enter>', self.connect_server_keyboard)
+
+    def change_status_bar(self, type, value):
+        if type == 'connection':
+            self.conn_status_value = value
+        elif type == 'rtt':
+            self.rtt_status_value = value
+        else:
+            return
+        self.render_status_bar()
+
+    def render_status_bar(self):
+        if not getattr(self, 'status_var', None):
+            return
+        parts = []
+        if self.show_connection and self.conn_status_value:
+            parts.append(str(self.conn_status_value))
+        if self.show_rtt and self.rtt_status_value:
+            parts.append(f"Пинг: {self.rtt_status_value}")
+        try:
+            self.status_var.set("; ".join(parts))
+        except Exception:
+            pass
 
     def sort_treeview(self, column, reverse=None):
         if reverse is None:
@@ -304,7 +344,7 @@ class FileManagerGUI:
                     if result is True:
                         self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
                         self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
-                        self.status_var.set(f"Подключено к {ip}:{port}")
+                        self.change_status_bar('connection', f"Подключено к {ip}:{port}")
                         self.save_connection_info(ip, port, explicit_port)
                         self.connected = True
                         self.ip, self.port = ip, port
@@ -334,7 +374,17 @@ class FileManagerGUI:
             threading.Thread(target=auth_thread, daemon=True).start()
 
         else:
-            self.client.disconnect()
+            try:
+                self.client.disconnect()
+            except Exception:
+                pass
+            self.client = None
+            self.connected = False
+            self.ip = None
+            self.port = None
+            self.clear_files_list()
+            self.status_text.set("Отключено")
+            self.change_status_bar('connection', "Отключено")
             self.operation_in_progress = False
             self.connect_operation = False
             self.change_buttons_state('normal', force=True)
@@ -405,7 +455,7 @@ class FileManagerGUI:
             messagebox.showwarning("Внимание", f"Порт должен быть в диапазоне 1..65535")
             return
 
-        self.client = FileClient(ip, port)
+        self.client = FileClient(ip, port, download_dir=self.download_dir)
 
         def connect_thread():
             self.operation_in_progress = True
@@ -420,7 +470,7 @@ class FileManagerGUI:
                 if connect_result is True:
                     self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
                     self.root.after(0, lambda: messagebox.showinfo("Успех", f"Успешно подключено к серверу {ip}:{port}"))
-                    self.status_var.set(f"Подключено к {ip}:{port}")
+                    self.change_status_bar('connection', f"Подключено к {ip}:{port}")
                     self.save_connection_info(ip, port, explicit_port)
                     success = True
                     self.connected = True
@@ -471,13 +521,14 @@ class FileManagerGUI:
             self.client.disconnect()
             self.client = None
             self.status_text.set("Отключено")
-            self.status_var.set("Отключено")
+            self.change_status_bar('connection', "Отключено")
             self.clear_files_list()
             self.total_size = 0
             self.total_number = 0
             self.connected = False
             self.ip = None
             self.port = None
+            self.progress_var.set(0)
 
         self.change_buttons_state('normal', force=True)
 
