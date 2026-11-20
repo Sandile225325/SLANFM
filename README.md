@@ -1,6 +1,6 @@
-<h1 align="center"><b>SLANFM</b></h1>
+<h1 align="center">SLANFM</h1>
 
-<h4 align="center"><b>Простое клиент-серверное приложение для передачи файлов.</b></h4>
+<h4 align="center">Простое клиент-серверное приложение для передачи файлов.</h4>
 
 <h5 align="center">
 
