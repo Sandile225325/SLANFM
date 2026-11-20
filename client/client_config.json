@@ -28,5 +28,9 @@
     "status_bar": true,
     "show_connection": true,
     "show_rtt": true
+  },
+  "ping_config": {
+    "ping_enabled": true,
+    "ping_interval": 5.0
   }
 }

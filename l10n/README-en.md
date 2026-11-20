@@ -73,22 +73,31 @@ The server configuration is stored in the file **`server/server_config.json`**.
 | `auth_rate_limit_failure_delay`       | number  | Delay in seconds before responding to an invalid token. Valid range: `0`–`10`                                |
 | `auth_rate_limit_global_max_attempts` | number  | Global limit of failed attempts from all IPs per `auth_rate_limit_global_window`                             |
 | `auth_rate_limit_global_window`       | number  | Global limit window in seconds                                                                               |
+| `ping_rate_limit_enabled`             | boolean | Whether to use ping rate limit protection                                                                    |
+| `ping_rate_limit_max`                 | number  | How many ping requests from one IP are allowed per `ping_rate_limit_window`                                  |
+| `ping_rate_limit_window`              | number  | Ping rate limit window in seconds                                                                            |
+| `ping_min_interval`                   | number  | Minimum interval between ping requests from one IP in seconds                                                |
 
 ### Client
 
 The client configuration is stored in the file **`client/config.json`**.
 
-| Parameter                        | Type   | Description                                                                                                        |
-| -------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `connect_config.default_port`    | string | Default port. Used if only an IP without `:port` is specified in the connection field                              |
-| `connect_config.non-tls_timeout` | number | Connection timeout in seconds when operating without TLS                                                           |
-| `connect_config.tls_timeout`     | number | Connection timeout in seconds when operating with TLS                                                              |
-| `values_config.chunk_size_range` | array  | Valid chunk size range in bytes. If the server offers values outside the range — the client will refuse to connect |
-| `values_config.timeout_range`    | array  | Valid timeout range in seconds. If the server offers values outside the range — the client will refuse to connect  |
-| `input_save_config.ip`           | string | Last entered IP address                                                                                            |
-| `input_save_config.port`         | string | Last entered port                                                                                                  |
-| `authentication_config.token`    | string | Token for authentication when connecting. Can be left empty for manual entry when connecting                       |
-| `paths_config.download_dir`      | string | Path for saving downloaded files (can be relative or absolute)                                                     |
+| Parameter                           | Type    | Description                                                                                                        |
+| ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `connect_config.default_port`       | string  | Default port. Used if only an IP without `:port` is specified in the connection field                              |
+| `connect_config.non-tls_timeout`    | number  | Connection timeout in seconds when operating without TLS                                                           |
+| `connect_config.tls_timeout`        | number  | Connection timeout in seconds when operating with TLS                                                              |
+| `values_config.chunk_size_range`    | array   | Valid chunk size range in bytes. If the server offers values outside the range — the client will refuse to connect |
+| `values_config.timeout_range`       | array   | Valid timeout range in seconds. If the server offers values outside the range — the client will refuse to connect  |
+| `input_save_config.ip`              | string  | Last entered IP address                                                                                            |
+| `input_save_config.port`            | string  | Last entered port                                                                                                  |
+| `authentication_config.token`       | string  | Token for authentication when connecting. Can be left empty for manual entry when connecting                       |
+| `paths_config.download_dir`         | string  | Path for saving downloaded files (can be relative or absolute)                                                     |
+| `status_bar_config.status_bar`      | boolean | Whether to show the status bar                                                                                     |
+| `status_bar_config.show_connection` | boolean | Whether to show connection status in the status bar                                                                |
+| `status_bar_config.show_rtt`        | boolean | Whether to show ping (RTT) in the status bar                                                                       |
+| `ping_config.ping_enabled`          | boolean | Whether to enable periodic ping                                                                                    |
+| `ping_config.ping_interval`         | number  | Interval between ping requests in seconds                                                                          |
 
 ### Generating a self-signed certificate and private key for TLS
 
@@ -104,7 +113,7 @@ After execution, the files **`private_key.key`** and **`certificate.crt`** will 
 
 ### Server
 
-The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, and brute-force token protection is displayed.
+The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, brute-force token protection, and ping rate limiting is displayed.
 During operation, client actions (uploads, downloads, deletions) are logged.
 
 ### Client

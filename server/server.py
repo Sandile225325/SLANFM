@@ -49,6 +49,13 @@ class FileServer:
         self.auth_last_cleanup = 0.0
         self.temp_dir = self.upload_dir / '.tmp'
         self.temp_dir.mkdir(exist_ok=True)
+        self.ping_rate_limit_enabled = True
+        self.ping_rate_limit_max = 20
+        self.ping_rate_limit_window = 10.0
+        self.ping_min_interval = 0.1
+        self.ping_state = {}
+        self.ping_lock = threading.Lock()
+        self.ping_last_cleanup = 0.0
 
         if config_path:
             self.load_config(config_path)
@@ -176,6 +183,13 @@ class FileServer:
                 else:
                     logging.warning(f"Некорректный auth_rate_limit_enabled: {auth_rate_limit_enabled}. Используется {self.auth_rate_limit_enabled}")
 
+            if 'ping_rate_limit_enabled' in config:
+                ping_rate_limit_enabled = config['ping_rate_limit_enabled']
+                if isinstance(ping_rate_limit_enabled, bool):
+                    self.ping_rate_limit_enabled = ping_rate_limit_enabled
+                else:
+                    logging.warning(f"Некорректный ping_rate_limit_enabled: {ping_rate_limit_enabled}. Используется {self.ping_rate_limit_enabled}")
+
             def _pos_int(key, default):
                 v = config.get(key)
                 if isinstance(v, int) and v > 0:
@@ -195,6 +209,15 @@ class FileServer:
                 self.auth_failure_delay = float(auth_rate_limit_failure_delay)
             elif 'auth_rate_limit_failure_delay' in config:
                 logging.warning(f"Некорректный auth_rate_limit_failure_delay: {auth_rate_limit_failure_delay}. Используется {self.auth_failure_delay}")
+
+            self.ping_rate_limit_max = _pos_int('ping_rate_limit_max', self.ping_rate_limit_max)
+            self.ping_rate_limit_window = float(_pos_int('ping_rate_limit_window', int(self.ping_rate_limit_window)))
+
+            ping_min_interval = config.get('ping_min_interval')
+            if isinstance(ping_min_interval, (int, float)) and ping_min_interval >= 0:
+                self.ping_min_interval = float(ping_min_interval)
+            elif 'ping_min_interval' in config:
+                logging.warning(f"Некорректный ping_min_interval: {ping_min_interval}. Используется {self.ping_min_interval}")
 
             logging.info(f"Конфигурация загружена из {config_path}")
 
@@ -340,12 +363,14 @@ class FileServer:
 
         auth_required = 'включена' if self.auth_token else 'не требуется'
         tls_enabled = 'включён, сертификат и ключ загружены' if self.tls_enabled else 'выключен'
-        rate_limit_enabled = 'включена' if self.auth_token and self.auth_rate_limit_enabled else 'выключена'
+        token_rate_limit_enabled = 'включена' if self.auth_token and self.auth_rate_limit_enabled else 'выключена'
+        ping_rate_limit_enabled = 'включена' if self.ping_rate_limit_enabled else 'выключена'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
         logging.info(f"Аутентификация для пользователей {auth_required}")
         logging.info(f"TLS {tls_enabled}")
-        logging.info(f"Защита от брутфорса {rate_limit_enabled}")
+        logging.info(f"Защита от брутфорса {token_rate_limit_enabled}")
+        logging.info(f"Ping-защита {ping_rate_limit_enabled}")
 
         try:
             while True:
@@ -590,6 +615,10 @@ class FileServer:
                     elif cmd == 'info':
                         client_socket.settimeout(self.timeout)
                         self.send_server_info(client_socket)
+                        client_socket.settimeout(None)
+                    elif cmd == 'ping':
+                        client_socket.settimeout(self.timeout)
+                        self.send_ping_respone(client_socket, address[0])
                         client_socket.settimeout(None)
                     elif cmd == 'disconnect':
                         break
@@ -836,6 +865,56 @@ class FileServer:
             self.send_response(client_socket, info)
         except Exception as e:
             self.send_response(client_socket, {'status': 'error', 'message': str(e)})
+
+    def send_ping_respone(self, client_socket, client_ip=None):
+        try:
+            now = time.time()
+
+            if self.ping_rate_limit_enabled and client_ip:
+                with self.ping_lock:
+                    e = self.ping_state.get(client_ip)
+                    if e is None:
+                        e = {'times': [], 'last': 0.0}
+                        self.ping_state[client_ip] = e
+
+                    if self.ping_min_interval > 0 and (now - e['last']) < self.ping_min_interval:
+                        wait = self.ping_min_interval - (now - e['last'])
+                        self.send_response(client_socket, {
+                            'status': 'error',
+                            'message': 'Слишком частые пинги',
+                            'retry_after': max(1, int(wait) + 1),
+                        })
+                        return
+
+                    e['times'] = [t for t in e['times'] if now - t <= self.ping_rate_limit_window]
+                    if len(e['times']) >= self.ping_rate_limit_max:
+                        retry = max(1, int(self.ping_rate_limit_window - (now - e['times'][0])) + 1)
+                        self.send_response(client_socket, {
+                            'status': 'error',
+                            'message': 'Превышен лимит пингов',
+                            'retry_after': retry,
+                        })
+                        return
+
+                    e['times'].append(now)
+                    e['last'] = now
+                    self._ping_cleanup(now)
+
+            self.send_response(client_socket, {'status': 'success', 'timestamp': now})
+        except Exception:
+            pass
+
+    def _ping_cleanup(self, now):
+        if now - self.ping_last_cleanup < 60:
+            return
+        self.ping_last_cleanup = now
+        stale = []
+        for ip, e in self.ping_state.items():
+            last_activity = e['times'][-1] if e['times'] else e['last']
+            if now - last_activity > max(60.0, self.ping_rate_limit_window * 3):
+                stale.append(ip)
+        for ip in stale:
+            del self.ping_state[ip]
 
     def receive_all(self, sock, length):
         data = b''

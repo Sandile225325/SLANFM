@@ -6,21 +6,24 @@ from pathlib import Path
 import struct
 import sys
 import ssl
+import time
 
 
 class FileClient:
-    def __init__(self, server_host=None, server_port=None):
+    def __init__(self, server_host=None, server_port=None, download_dir=None):
         self.server_host = server_host
         self.server_port = server_port
         self.socket = None
-        self.download_dir = Path('downloads')
-        self.download_dir.mkdir(exist_ok=True)
+        self.download_dir = Path(download_dir) if download_dir else None
         self.chunk_size = 65536
         self.max_file_size = 2 * 1024 * 1024 * 1024
         self.timeout = 120
         self.config_file = "client_config.json"
         self.config = self.load_config()
         self.auth_token = self.config.get('authentication_config', {}).get('token', '')
+        self.tls_enabled = False
+        self.ping_min_interval = 0.5
+        self.last_ping_call = 0.0
 
     def connect(self):
         try:
@@ -84,7 +87,10 @@ class FileClient:
 
             if auth_required:
                 if self.auth_token:
-                    self.send_command({'command': 'auth', 'token': self.auth_token})
+                    self.send_command({
+                        'command': 'auth', 
+                        'token': self.auth_token
+                    })
                     auth_response = self.receive_response()
                     if auth_response is None:
                         self.socket.close()
@@ -169,9 +175,15 @@ class FileClient:
 
     def download_file(self, filename, save_path=None, progress_callback=None):
         if not save_path:
+            if self.download_dir is None:
+                return "Не задана папка для скачивания"
             save_path = self.download_dir / filename
 
         save_path = Path(save_path)
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return "Не удалось создать папку для сохранения файла"
         temp_path = save_path.with_name(f'.{save_path.name}.slanfm.part')
 
         self.send_command({
@@ -383,3 +395,52 @@ class FileClient:
     def get_server_info(self):
         self.send_command({'command': 'info'})
         response = self.receive_response()
+
+    def ping(self):
+        if not self.socket:
+            return {'error': 'Нет соединения'}
+
+        now = time.time()
+        if now - self.last_ping_call < self.ping_min_interval:
+            return {
+                'error': 'Слишком частый пинг',
+                'retry_after': self.ping_min_interval - (now - self.last_ping_call),
+            }
+        self.last_ping_call = now
+
+        try:
+            old_timeout = self.socket.gettimeout()
+        except Exception:
+            old_timeout = None
+
+        ping_timeout = min(2.0, float(self.timeout)) if self.timeout else 2.0
+
+        try:
+            try:
+                self.socket.settimeout(ping_timeout)
+            except Exception:
+                pass
+
+            t0 = time.time()
+            self.send_command({'command': 'ping'})
+            response = self.receive_response()
+            rtt = time.time() - t0
+
+            if response is None:
+                return {'error': 'Нет ответа на ping'}
+            if response.get('status') != 'success':
+                return {
+                    'error': response.get('message', 'Ошибка ping'),
+                    'retry_after': response.get('retry_after', 0),
+                }
+
+            return {'rtt': rtt}
+
+        except Exception as e:
+            return {'error': str(e)}
+        finally:
+            if old_timeout is not None:
+                try:
+                    self.socket.settimeout(old_timeout)
+                except Exception:
+                    pass

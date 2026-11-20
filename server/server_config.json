@@ -15,7 +15,11 @@
     "auth_rate_limit_max_attempts": 5,
     "auth_rate_limit_window": 300,
     "auth_rate_limit_lockout": 900,
-    "auth_rate_limit_failure_delay": 0.3,
+    "auth_rate_limit_failure_delay": 0,
     "auth_rate_limit_global_max_attempts": 50,
-    "auth_rate_limit_global_window": 300
+    "auth_rate_limit_global_window": 300,
+    "ping_rate_limit_enabled": true,
+    "ping_rate_limit_max": 20,
+    "ping_rate_limit_window": 10,
+    "ping_min_interval": 1
 }

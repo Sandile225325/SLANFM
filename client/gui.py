@@ -47,10 +47,7 @@ class FileManagerGUI:
         self.start_progress_monitor()
 
         self.download_dir = self.resolve_download_dir()
-        try:
-            self.download_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            messagebox.showerror("Ошибка", "Не удалось создать папку для скачивания")
+        self.download_dir.mkdir(parents=True, exist_ok=True)
 
         self.files_tree.bind('<<TreeviewSelect>>', self.on_file_selection_changed)
 
@@ -60,6 +57,15 @@ class FileManagerGUI:
         self.change_buttons_state('normal', force=True)
 
         self.cleanup_stale_parts()
+
+        self.socket_lock = threading.Lock()
+        self.ping_stop = threading.Event()
+        self.ping_backoff = 0.0
+
+        self.ping_thread = threading.Thread(target=self.ping_loop, daemon=True)
+        self.ping_thread.start()
+
+        self.ping_suspended = False
 
     def start_progress_monitor(self):
         self.check_progress_queue()
@@ -93,6 +99,51 @@ class FileManagerGUI:
         except queue.Empty:
             pass
 
+    def ping_loop(self):
+        while not self.ping_stop.is_set():
+            result = None
+            try:
+                if self.ping_enabled and self.connected and not self.ping_suspended:
+                    if self.socket_lock.acquire(blocking=False):
+                        try:
+                            if self.client and self.connected:
+                                result = self.client.ping()
+                        except Exception:
+                            result = {'error': 'Ошибка пинга'}
+                        finally:
+                            self.socket_lock.release()
+            except Exception:
+                result = {'error': 'Ошибка пинга'}
+
+            if result is not None:
+                self.handle_ping_result(result)
+
+            sleep_time = max(self.ping_interval, self.ping_backoff)
+            end_time = time.time() + sleep_time
+            while time.time() < end_time:
+                if self.ping_stop.is_set():
+                    return
+                time.sleep(min(0.1, max(0.0, end_time - time.time())))
+
+    def handle_ping_result(self, result):
+        if self.ping_suspended:
+            return
+        
+        if result.get('error'):
+            try:
+                retry = float(result.get('retry_after') or 0)
+            except (TypeError, ValueError):
+                retry = 0.0
+            if retry > 0:
+                self.ping_backoff = retry
+            self.root.after(0, lambda: self.change_status_bar('rtt', 'ошибка'))
+            return
+
+        self.ping_backoff = 0.0
+        rtt_ms = result['rtt'] * 1000.0
+        label = f"{rtt_ms:.0f} мс"
+        self.root.after(0, lambda v=label: self.change_status_bar('rtt', v))
+
     def resource_path(self, relative_path):
         try:
             base_path = Path(sys._MEIPASS)
@@ -112,7 +163,8 @@ class FileManagerGUI:
             "connect_config": {"default_port": "6666"},
             "input_save_config": {"ip": ""},
             "paths_config": {"download_dir": "downloads"},
-            "status_bar_config": {"status_bar": True, "show_connection": True, "show_rtt": True}
+            "status_bar_config": {"status_bar": True, "show_connection": True, "show_rtt": True},
+            "ping_config": {"ping_enabled": True, "ping_interval": 5.0}
         }
 
         try:
@@ -224,6 +276,15 @@ class FileManagerGUI:
             and (self.show_connection or self.show_rtt)
         )
 
+        ping_cfg = self.config.get("ping_config", {})
+        self.ping_enabled = bool(ping_cfg.get("ping_enabled", True))
+        try:
+            self.ping_interval = max(1.0, float(ping_cfg.get("ping_interval", 5.0)))
+        except (TypeError, ValueError):
+            self.ping_interval = 5.0
+        if not self.show_rtt:
+            self.ping_enabled = False
+
         self.conn_status_value = "Не подключено"
         self.rtt_status_value = None
 
@@ -256,6 +317,8 @@ class FileManagerGUI:
         if type == 'connection':
             self.conn_status_value = value
         elif type == 'rtt':
+            if self.ping_suspended and value is not None:
+                return
             self.rtt_status_value = value
         else:
             return
@@ -267,7 +330,7 @@ class FileManagerGUI:
         parts = []
         if self.show_connection and self.conn_status_value:
             parts.append(str(self.conn_status_value))
-        if self.show_rtt and self.rtt_status_value:
+        if self.show_rtt and self.rtt_status_value and not self.ping_suspended:
             parts.append(f"Пинг: {self.rtt_status_value}")
         try:
             self.status_var.set("; ".join(parts))
@@ -339,7 +402,8 @@ class FileManagerGUI:
                 self.change_buttons_state('disabled')
                 try:
 
-                    result = self.client.authenticate(token)
+                    with self.socket_lock:
+                        result = self.client.authenticate(token)
 
                     if result is True:
                         self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})
@@ -369,6 +433,7 @@ class FileManagerGUI:
                 finally:
                     self.operation_in_progress = False
                     self.connect_operation = False
+                    self.ping_suspended = False
                     self.change_buttons_state('normal')
 
             threading.Thread(target=auth_thread, daemon=True).start()
@@ -387,6 +452,7 @@ class FileManagerGUI:
             self.change_status_bar('connection', "Отключено")
             self.operation_in_progress = False
             self.connect_operation = False
+            self.ping_suspended = False
             self.change_buttons_state('normal', force=True)
 
     def connect_server(self):
@@ -405,6 +471,9 @@ class FileManagerGUI:
         except ValueError:
             messagebox.showwarning("Внимание", f"Некорректный порт в конфигурации: {default_port_str}")
             return
+
+        self.ping_suspended = True
+        self.change_status_bar('rtt', None)
 
         self.clear_files_list()
 
@@ -455,6 +524,16 @@ class FileManagerGUI:
             messagebox.showwarning("Внимание", f"Порт должен быть в диапазоне 1..65535")
             return
 
+        if self.client:
+            with self.socket_lock:
+                try:
+                    self.client.disconnect()
+                except Exception:
+                    pass
+            self.client = None
+        self.connected = False
+        self.ping_backoff = 0.0
+
         self.client = FileClient(ip, port, download_dir=self.download_dir)
 
         def connect_thread():
@@ -462,6 +541,7 @@ class FileManagerGUI:
             self.connect_operation = True
             self.change_buttons_state('disabled')
             success = False
+            need_auth = False
             try:
                 self.progress_queue.put({'status': f'Подключение к {ip}:{port}...'})
 
@@ -477,6 +557,7 @@ class FileManagerGUI:
                     self.ip, self.port = ip, port
 
                 elif connect_result == "need_auth":
+                    need_auth = True
                     self.progress_queue.put({'status': 'Требуется аутентификация'})
                     self.root.after(0, lambda: self.authenticate(ip, port, explicit_port))
 
@@ -507,6 +588,8 @@ class FileManagerGUI:
                 self.operation_in_progress = False
                 self.connect_operation = False
                 self.change_buttons_state('normal')
+                if not need_auth:
+                    self.ping_suspended = False
                 if success:
                     self.root.after(0, self.refresh_files(True))
 
@@ -518,19 +601,26 @@ class FileManagerGUI:
             return
 
         if self.client:
-            self.client.disconnect()
-            self.client = None
+            self.connected = False
+            with self.socket_lock:
+                try:
+                    self.client.disconnect()
+                except Exception:
+                    pass
+                self.client = None
             self.status_text.set("Отключено")
             self.change_status_bar('connection', "Отключено")
+            self.change_status_bar('rtt', None)
             self.clear_files_list()
             self.total_size = 0
             self.total_number = 0
-            self.connected = False
             self.ip = None
             self.port = None
             self.progress_var.set(0)
+            self.ping_backoff = 0.0
 
         self.change_buttons_state('normal', force=True)
+        self.ping_suspended = False
 
     def enough_disk_space(self, path, required_space):
         try:
@@ -576,8 +666,9 @@ class FileManagerGUI:
             try:
                 self.progress_queue.put({'status': 'Получение списка файлов...'})
 
-                self.client.send_command({'command': 'list'})
-                response = self.client.receive_response()
+                with self.socket_lock:
+                    self.client.send_command({'command': 'list'})
+                    response = self.client.receive_response()
 
                 if response and response.get('status') == 'success':
                     self.server_files = response.get('files', [])
@@ -666,8 +757,9 @@ class FileManagerGUI:
             operation_success = False
             try:
                 self.progress_queue.put({'status': 'Проверка наличия файла на сервере...'})
-                self.client.send_command({'command': 'list'})
-                response = self.client.receive_response()
+                with self.socket_lock:
+                    self.client.send_command({'command': 'list'})
+                    response = self.client.receive_response()
                 if response and response.get('status') == 'success':
                     server_files = response.get('files', [])
                     filename = os.path.basename(filepath)
@@ -689,7 +781,8 @@ class FileManagerGUI:
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Загрузка: {percent:.1f}%'})
 
-                result = self.client.upload_file(filepath, update_progress)
+                with self.socket_lock:
+                    result = self.client.upload_file(filepath, update_progress)
 
                 if result is True:
                     self.progress_queue.put({'percent': 100, 'status': 'Файл успешно загружен'})
@@ -764,7 +857,8 @@ class FileManagerGUI:
                 def update_progress(percent):
                     self.progress_queue.put({'percent': percent, 'status': f'Скачивание: {percent:.1f}%'})
 
-                result = self.client.download_file(filename, save_path, update_progress)
+                with self.socket_lock:
+                    result = self.client.download_file(filename, save_path, update_progress)
 
                 if result is True:
                     self.progress_queue.put({'percent': 100, 'status': 'Файл успешно скачан'})
@@ -816,7 +910,8 @@ class FileManagerGUI:
             try:
                 self.progress_queue.put({'status': f'Удаление файла {filename}...'})
 
-                delete_result = self.client.delete_file(filename)
+                with self.socket_lock:
+                    delete_result = self.client.delete_file(filename)
 
                 if isinstance(delete_result, str):
                     self.progress_queue.put({'status': f'Ошибка: {delete_result}'})
