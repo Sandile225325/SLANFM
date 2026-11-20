@@ -21,5 +21,7 @@
     "ping_rate_limit_enabled": true,
     "ping_rate_limit_max": 20,
     "ping_rate_limit_window": 10,
-    "ping_min_interval": 1
+    "ping_min_interval": 1,
+    "progress_log_unit": "percent",
+    "progress_log_value": 20
 }
