@@ -65,18 +65,20 @@ The server configuration is stored in the file **`server/server_config.json`**.
 | `tls_enabled`                         | boolean | Whether to use TLS encryption. If `false`, the `cert_file` and `key_file` parameters are ignored             |
 | `cert_file`                           | string  | Path to the certificate file (required for TLS)                                                              |
 | `key_file`                            | string  | Path to the private key file (required for TLS)                                                              |
-| `max_json_size`                       | number  | Maximum JSON command size in bytes. Valid range: `1024`–`67108864`                                           |
+| `max_json_size`                       | number  | Maximum JSON command size in bytes                                                                           |
 | `auth_rate_limit_enabled`             | boolean | Whether to use brute-force token protection                                                                  |
 | `auth_rate_limit_max_attempts`        | number  | How many failed authentication attempts from one IP are allowed per `auth_rate_limit_window` before blocking |
 | `auth_rate_limit_window`              | number  | Window for counting failed attempts in seconds                                                               |
 | `auth_rate_limit_lockout`             | number  | IP lockout duration in seconds after attempts are exhausted                                                  |
-| `auth_rate_limit_failure_delay`       | number  | Delay in seconds before responding to an invalid token. Valid range: `0`–`10`                                |
+| `auth_rate_limit_failure_delay`       | number  | Delay in seconds before responding to an invalid token                                                       |
 | `auth_rate_limit_global_max_attempts` | number  | Global limit of failed attempts from all IPs per `auth_rate_limit_global_window`                             |
 | `auth_rate_limit_global_window`       | number  | Global limit window in seconds                                                                               |
 | `ping_rate_limit_enabled`             | boolean | Whether to use ping rate limit protection                                                                    |
 | `ping_rate_limit_max`                 | number  | How many ping requests from one IP are allowed per `ping_rate_limit_window`                                  |
 | `ping_rate_limit_window`              | number  | Ping rate limit window in seconds                                                                            |
 | `ping_min_interval`                   | number  | Minimum interval between ping requests from one IP in seconds                                                |
+| `progress_log_unit`                   | string  | Unit for logging transfer progress. `percent` — as a percentage, `mb` — in megabytes                         |
+| `progress_log_value`                  | number  | Interval value for progress logging in `progress_log_unit` units                                             |
 
 ### Client
 
@@ -113,7 +115,7 @@ After execution, the files **`private_key.key`** and **`certificate.crt`** will 
 
 ### Server
 
-The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, brute-force token protection, and ping rate limiting is displayed.
+The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, brute-force token protection, ping rate limiting, and progress logging is displayed.
 During operation, client actions (uploads, downloads, deletions) are logged.
 
 ### Client
