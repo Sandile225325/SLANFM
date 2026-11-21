@@ -403,7 +403,7 @@ class FileManagerGUI:
                 try:
 
                     with self.socket_lock:
-                        result = self.client.authenticate(token)
+                        result = self.client.authenticate(token.strip())
 
                     if result is True:
                         self.progress_queue.put({'status': f'Подключено к {ip}:{port}'})

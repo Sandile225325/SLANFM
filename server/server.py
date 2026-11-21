@@ -56,6 +56,8 @@ class FileServer:
         self.ping_state = {}
         self.ping_lock = threading.Lock()
         self.ping_last_cleanup = 0.0
+        self.progress_log_value = 10
+        self.progress_log_unit = 'mb'
 
         if config_path:
             self.load_config(config_path)
@@ -174,28 +176,57 @@ class FileServer:
                 if isinstance(max_json_size, int) and 1024 <= max_json_size <= 64 * 1024 * 1024:
                     self.max_json_size = max_json_size
                 else:
-                    logging.warning(f"Некорректный max_json_size: {max_json_size}. Используется {self.max_json_size}")
+                    logging.warning(f"Некорректный max_json_size: {max_json_size}. Используется значение {self.max_json_size}")
 
             if 'auth_rate_limit_enabled' in config:
                 auth_rate_limit_enabled = config['auth_rate_limit_enabled']
                 if isinstance(auth_rate_limit_enabled, bool):
                     self.auth_rate_limit_enabled = auth_rate_limit_enabled
                 else:
-                    logging.warning(f"Некорректный auth_rate_limit_enabled: {auth_rate_limit_enabled}. Используется {self.auth_rate_limit_enabled}")
+                    logging.warning(f"Некорректный auth_rate_limit_enabled: {auth_rate_limit_enabled}. Используется значение {self.auth_rate_limit_enabled}")
 
             if 'ping_rate_limit_enabled' in config:
                 ping_rate_limit_enabled = config['ping_rate_limit_enabled']
                 if isinstance(ping_rate_limit_enabled, bool):
                     self.ping_rate_limit_enabled = ping_rate_limit_enabled
                 else:
-                    logging.warning(f"Некорректный ping_rate_limit_enabled: {ping_rate_limit_enabled}. Используется {self.ping_rate_limit_enabled}")
+                    logging.warning(f"Некорректный ping_rate_limit_enabled: {ping_rate_limit_enabled}. Используется значение {self.ping_rate_limit_enabled}")
+
+            if 'progress_log_unit' in config:
+                progress_log_unit = config['progress_log_unit']
+                if isinstance(progress_log_unit, str) and progress_log_unit.strip().lower() in ('mb', 'мб', 'percent', '%'):
+                    normalized = progress_log_unit.strip().lower()
+                    self.progress_log_unit = 'percent' if normalized in ('percent', '%') else 'mb'
+                else:
+                    logging.warning(f"Некорректный progress_log_unit: {progress_log_unit}. Используется значение {self.progress_log_unit}")
+
+            if 'progress_log_value' in config:
+                progress_log_value = config['progress_log_value']
+                if isinstance(progress_log_value, (int, float)) and progress_log_value > 0:
+                    if self.progress_log_unit == 'percent' and progress_log_value > 100:
+                        self.progress_log_value = 20
+                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 20")
+                    else:
+                        self.progress_log_value = progress_log_value
+                else:
+                    if self.progress_log_unit == 'percent':
+                        self.progress_log_value = 20
+                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 20")
+                    else:
+                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение {self.progress_log_value}")
+                if self.progress_log_unit == 'mb' and self.progress_log_value < 1:
+                    self.progress_log_value = 1
+                    logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 1")
+                if self.progress_log_unit == 'percent' and self.progress_log_value < 0.0001:
+                    self.progress_log_value = 0.0001
+                    logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 0.0001")
 
             def _pos_int(key, default):
                 v = config.get(key)
                 if isinstance(v, int) and v > 0:
                     return v
                 if key in config:
-                    logging.warning(f"Некорректный {key}: {v}. Используется {default}")
+                    logging.warning(f"Некорректный {key}: {v}. Используется значение {default}")
                 return default
 
             self.auth_max_attempts = _pos_int('auth_rate_limit_max_attempts', self.auth_max_attempts)
@@ -208,16 +239,19 @@ class FileServer:
             if isinstance(auth_rate_limit_failure_delay, (int, float)) and 0 <= auth_rate_limit_failure_delay <= 10:
                 self.auth_failure_delay = float(auth_rate_limit_failure_delay)
             elif 'auth_rate_limit_failure_delay' in config:
-                logging.warning(f"Некорректный auth_rate_limit_failure_delay: {auth_rate_limit_failure_delay}. Используется {self.auth_failure_delay}")
+                logging.warning(f"Некорректный auth_rate_limit_failure_delay: {auth_rate_limit_failure_delay}. Используется значение {self.auth_failure_delay}")
 
             self.ping_rate_limit_max = _pos_int('ping_rate_limit_max', self.ping_rate_limit_max)
             self.ping_rate_limit_window = float(_pos_int('ping_rate_limit_window', int(self.ping_rate_limit_window)))
 
             ping_min_interval = config.get('ping_min_interval')
-            if isinstance(ping_min_interval, (int, float)) and ping_min_interval >= 0:
+            if isinstance(ping_min_interval, (int, float)) and ping_min_interval >= 0.01:
                 self.ping_min_interval = float(ping_min_interval)
             elif 'ping_min_interval' in config:
-                logging.warning(f"Некорректный ping_min_interval: {ping_min_interval}. Используется {self.ping_min_interval}")
+                logging.warning(f"Некорректный ping_min_interval: {ping_min_interval}. Используется значение {self.ping_min_interval}")
+
+            self.temp_dir = self.upload_dir / '.tmp'
+            self.temp_dir.mkdir(exist_ok=True)
 
             logging.info(f"Конфигурация загружена из {config_path}")
 
@@ -314,9 +348,7 @@ class FileServer:
                 self.auth_cleanup(now)
                 return self.auth_lockout
 
-            self.auth_global_failures = [
-                t for t in self.auth_global_failures if now - t <= self.auth_global_window
-            ]
+            self.auth_global_failures = [t for t in self.auth_global_failures if now - t <= self.auth_global_window]
             self.auth_global_failures.append(now)
             if len(self.auth_global_failures) >= self.auth_global_max_attempts:
                 self.auth_global_locked_until = now + self.auth_lockout
@@ -365,12 +397,14 @@ class FileServer:
         tls_enabled = 'включён, сертификат и ключ загружены' if self.tls_enabled else 'выключен'
         token_rate_limit_enabled = 'включена' if self.auth_token and self.auth_rate_limit_enabled else 'выключена'
         ping_rate_limit_enabled = 'включена' if self.ping_rate_limit_enabled else 'выключена'
+        progress_unit_label = '%' if self.progress_log_unit == 'percent' else 'МБ'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
         logging.info(f"Аутентификация для пользователей {auth_required}")
         logging.info(f"TLS {tls_enabled}")
         logging.info(f"Защита от брутфорса {token_rate_limit_enabled}")
         logging.info(f"Ping-защита {ping_rate_limit_enabled}")
+        logging.info(f"Логирование прогресса: каждые {self.progress_log_value} {progress_unit_label}")
 
         try:
             while True:
@@ -393,13 +427,17 @@ class FileServer:
 
                 is_tls = False
 
+                peer = f"{address[0]}:{address[1]}"
+
                 if self.tls_enabled and self.ssl_context:
                     try:
                         client_socket.settimeout(1.0)
                         first_byte = client_socket.recv(1, socket.MSG_PEEK)
                     except socket.timeout:
                         first_byte = b''
-                    except (ConnectionResetError, OSError):
+                        logging.warning(f"Клиент {peer}: таймаут ожидания TLS ClientHello")
+                    except (ConnectionResetError, OSError) as e:
+                        logging.warning(f"Клиент {peer}: ошибка при проверке TLS: {e}")
                         try:
                             client_socket.close()
                         except Exception:
@@ -415,7 +453,7 @@ class FileServer:
                             )
                             is_tls = True
                         except (ssl.SSLError, ConnectionResetError, OSError) as e:
-                            logging.warning(f"TLS-рукопожатие с {address} не удалось: {e}")
+                            logging.warning(f"TLS-рукопожатие с {peer} не удалось: {e}")
                             try:
                                 client_socket.close()
                             except Exception:
@@ -434,7 +472,7 @@ class FileServer:
                     client_thread.daemon = True
                     client_thread.start()
                 except Exception as e:
-                    logging.error(f"Не удалось запустить обработчик для {address}: {e}")
+                    logging.error(f"Не удалось запустить обработчик для {peer}: {e}")
                     try:
                         client_socket.close()
                     except Exception:
@@ -483,6 +521,9 @@ class FileServer:
             pass
 
     def handle_client(self, client_socket, address, is_tls=False):
+        peer = f"{address[0]}:{address[1]}"
+        connected = False
+        
         try:
             self.send_response(client_socket, {
                 'type': 'init',
@@ -494,7 +535,12 @@ class FileServer:
             })
 
             if self.tls_enabled and not is_tls:
+                logging.warning(f"Клиент {peer} отклонён: требуется TLS-соединение")
                 return
+            
+            if not self.auth_token:
+                logging.info(f"Клиент {peer} подключён")
+                connected = True
 
             if self.auth_token:
                 client_ip = address[0]
@@ -506,9 +552,7 @@ class FileServer:
                 data_length = struct.unpack('>I', command_data)[0]
 
                 if data_length > self.max_json_size:
-                    self.send_response(client_socket, {
-                        'status': 'error', 'message': 'Слишком большое сообщение',
-                    })
+                    self.send_response(client_socket, {'status': 'error', 'message': 'Слишком большое сообщение',})
                     self.auth_record_failure(client_ip)
                     return
 
@@ -574,6 +618,9 @@ class FileServer:
                 self.auth_record_success(client_ip)
                 self.send_response(client_socket, {'status': 'success', 'message': 'Аутентификация успешна'})
 
+                logging.info(f"Клиент {peer} успешно подключён и аутентифицирован")
+                connected = True
+
             client_socket.settimeout(None)
 
             while True:
@@ -635,6 +682,8 @@ class FileServer:
                 client_socket.close()
             except Exception:
                 pass
+            if connected:
+                logging.info(f"Клиент {peer} отключён")
 
     def send_file_list(self, client_socket):
         try:
@@ -683,6 +732,7 @@ class FileServer:
                 logging.error("Клиент не подтвердил готовность к приёму файла")
                 return
 
+            progress_state = self.progress_log_state(file_size)
             sent_total = 0
             with open(filepath, 'rb') as f:
                 while True:
@@ -699,8 +749,8 @@ class FileServer:
 
                     sent_total += len(chunk)
 
-                    if sent_total % (10 * 1024 * 1024) < self.chunk_size:
-                        percent = (sent_total / file_size) * 100
+                    if self.progress_should_log(progress_state, sent_total, file_size):
+                        percent = (sent_total / file_size) * 100 if file_size else 0.0
                         logging.info(f"Отправка {filename}: {percent:.1f}% ({sent_total}/{file_size} байт)")
 
             logging.info(f"Файл {filename} отправлен клиенту ({file_size} байт)")
@@ -745,6 +795,7 @@ class FileServer:
 
         received = 0
         computed_md5 = None
+        progress_state = self.progress_log_state(file_size)
 
         try:
             self.send_response(client_socket, {'status': 'ready'})
@@ -778,8 +829,8 @@ class FileServer:
                     f.write(chunk)
                     received += len(chunk)
 
-                    if received % (10 * 1024 * 1024) < self.chunk_size:
-                        percent = (received / file_size) * 100
+                    if self.progress_should_log(progress_state, received, file_size):
+                        percent = (received / file_size) * 100 if file_size else 0.0
                         logging.info(f"Приём {filename}: {percent:.1f}% ({received}/{file_size} байт)")
 
             if received != file_size:
@@ -915,6 +966,29 @@ class FileServer:
                 stale.append(ip)
         for ip in stale:
             del self.ping_state[ip]
+
+    def progress_log_state(self, total_size):
+        if self.progress_log_unit == 'percent':
+            step = float(max(0.0001, self.progress_log_value))
+            return {'unit': 'percent', 'step': step, 'next': step}
+        step_bytes = int(max(1, self.progress_log_value) * 1024 * 1024)
+        return {'unit': 'mb', 'step': step_bytes, 'next': step_bytes}
+
+    def progress_should_log(self, state, done, total):
+        if total <= 0:
+            return False
+        if state['unit'] == 'percent':
+            percent = (done / total) * 100.0
+            if percent + 1e-9 >= state['next']:
+                while state['next'] <= percent + 1e-9:
+                    state['next'] += state['step']
+                return True
+            return False
+        if done >= state['next']:
+            while state['next'] <= done:
+                state['next'] += state['step']
+            return True
+        return False
 
     def receive_all(self, sock, length):
         data = b''
