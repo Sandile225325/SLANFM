@@ -415,12 +415,13 @@ class FileManagerGUI:
                         self.root.after(0, self.refresh_files(True))
 
                     elif isinstance(result, dict):
-                        ra = result.get('retry_after', 0)
+                        ra = int(result.get('retry_after', 0))
+                        error_msg = result.get('error', 'Ошибка аутентификации')
                         self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
                         if ra == 0:
                             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"{msg}"))
                         else:
-                            self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с."))
+                            self.root.after(0, lambda msg=error_msg, r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с."))
                         self.disconnect_server()
 
                     else:
