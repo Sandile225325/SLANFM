@@ -82,7 +82,7 @@ The server configuration is stored in the file **`server/server_config.json`**.
 
 ### Client
 
-The client configuration is stored in the file **`client/config.json`**.
+The client configuration is stored in the file **`client/client_config.json`**.
 
 | Parameter                           | Type    | Description                                                                                                        |
 | ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |

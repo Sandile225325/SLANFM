@@ -37,7 +37,14 @@ class FileClient:
             init_response = self.receive_response()
             self.socket = original_socket
 
-            if (init_response and init_response.get('type') == 'init' and not init_response.get('tls_required')):
+            if init_response.get('_error_kind'):
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                return f"Не удалось установить соединение с сервером: {init_response.get('message', 'неизвестная ошибка')}"
+
+            if init_response.get('type') == 'init' and not init_response.get('tls_required'):
                 self.socket = sock
                 self.tls_enabled = False
             else:
@@ -55,13 +62,14 @@ class FileClient:
 
                 self.socket = tls_sock
                 init_response = self.receive_response()
-                if init_response and init_response.get('type') == 'init':
+                if init_response.get('type') == 'init':
                     self.socket = tls_sock
                     self.tls_enabled = True
                 else:
                     tls_sock.close()
                     self.socket = None
-                    return "Не удалось установить соединение с сервером"
+                    reason = init_response.get('message', 'неизвестная ошибка')
+                    return f"Не удалось установить соединение с сервером: {reason}"
 
             cfg = getattr(self, 'config', {}).get('values_config', {})
             chunk_min, chunk_max = min(cfg.get('chunk_size_range', [1024, 10485760])), max(cfg.get('chunk_size_range', [1024, 10485760]))
@@ -75,7 +83,7 @@ class FileClient:
             if not (chunk_min <= chunk_size <= chunk_max):
                 self.socket.close()
                 return "Размер чанка сервера не входит в допустимый диапазон клиента"
-            
+
             if not (timeout_min <= timeout <= timeout_max):
                 self.socket.close()
                 return "Таймаут сервера не входит в допустимый диапазон клиента"
@@ -87,21 +95,20 @@ class FileClient:
 
             if auth_required:
                 if self.auth_token:
-                    self.send_command({
-                        'command': 'auth', 
-                        'token': self.auth_token
-                    })
+                    if not self.send_command({'command': 'auth', 'token': self.auth_token}):
+                        self._force_close()
+                        return "Не удалось отправить данные аутентификации"
                     auth_response = self.receive_response()
-                    if auth_response is None:
-                        self.socket.close()
-                        self.socket = None
-                        return "Соединение прервано сервером при аутентификации"
+                    if auth_response.get('_error_kind'):
+                        self._force_close()
+                        return f"Ошибка аутентификации: {auth_response.get('message', 'сетевая ошибка')}"
                     if auth_response.get('status') != 'success':
-                        self.socket.close()
-                        if auth_response.get('retry_after'):
+                        retry = int(auth_response.get('retry_after', 0) or 0)
+                        self._force_close()
+                        if retry:
                             return {
                                 'error': auth_response.get('message', 'Заблокировано'),
-                                'retry_after': int(auth_response['retry_after']),
+                                'retry_after': retry,
                             }
                         return "Ошибка аутентификации: неверный токен"
                 else:
@@ -153,10 +160,11 @@ class FileClient:
             return default_values
         
     def authenticate(self, token):
-        self.send_command({
-            'command': 'auth', 
-            'token': token
-        })
+        if not self.send_command({'command': 'auth', 'token': token}):
+            return {
+                'error': 'Не удалось отправить данные аутентификации',
+                'retry_after': 0
+            }
 
         response = self.receive_response()
         if response is None:
@@ -186,46 +194,35 @@ class FileClient:
             return "Не удалось создать папку для сохранения файла"
         temp_path = save_path.with_name(f'.{save_path.name}.slanfm.part')
 
-        self.send_command({
-            'command': 'download',
-            'filename': filename
-        })
+        if not self.send_command({'command': 'download', 'filename': filename}):
+            return "Соединение потеряно перед началом скачивания"
 
         response = self.receive_response()
 
-        if not response or response.get('status') != 'success':
-            return response.get('message', 'Неизвестная ошибка') if response else "Нет ответа от сервера"
+        err = self._response_error(response)
+        if err:
+            return err
+        if response.get('status') != 'success':
+            return response.get('message', 'Неизвестная ошибка')
 
         file_size = response['size']
         server_md5 = response.get('md5', '')
 
-        self.send_command({'status': 'ready'})
+        if not self.send_command({'status': 'ready'}):
+            return "Соединение потеряно перед приёмом файла"
 
         received = 0
-
         try:
             with open(temp_path, 'wb') as f:
                 while received < file_size:
-                    try:
-                        chunk_size_data = self.receive_all(4)
-                        if not chunk_size_data or len(chunk_size_data) != 4:
-                            return "Соединение разорвано при скачивании"
+                    chunk_size_data = self.receive_all(4)
+                    chunk_size = struct.unpack('>I', chunk_size_data)[0]
+                    chunk = self.receive_all(chunk_size)
+                    f.write(chunk)
+                    received += len(chunk)
 
-                        chunk_size = struct.unpack('>I', chunk_size_data)[0]
-                        chunk = self.receive_all(chunk_size)
-                        if not chunk or len(chunk) != chunk_size:
-                            return "Не удалось получить чанк"
-
-                        f.write(chunk)
-                        received += len(chunk)
-
-                        if progress_callback and file_size > 0:
-                            percent = (received / file_size) * 100
-                            progress_callback(percent)
-                    except socket.timeout:
-                        return "Таймаут при скачивании"
-                    except Exception:
-                        return "Ошибка приема данных"
+                    if progress_callback and file_size > 0:
+                        progress_callback((received / file_size) * 100)
 
             if received != file_size:
                 return "Неполная загрузка файла"
@@ -235,9 +232,7 @@ class FileClient:
                 with open(temp_path, 'rb') as f:
                     for chunk in iter(lambda: f.read(8192), b''):
                         md5_hash.update(chunk)
-
-                client_md5 = md5_hash.hexdigest()
-                if client_md5 != server_md5:
+                if md5_hash.hexdigest() != server_md5:
                     return "MD5 хеш скачанного файла не совпадает"
 
             try:
@@ -249,6 +244,10 @@ class FileClient:
                 progress_callback(100)
             return True
 
+        except socket.timeout:
+            return "Таймаут при скачивании"
+        except ConnectionError as e:
+            return f"Ошибка скачивания: {e}"
         except Exception:
             return "Ошибка скачивания"
         finally:
@@ -265,7 +264,6 @@ class FileClient:
             return "Файл не найден"
 
         file_size = path.stat().st_size
-
         if file_size > self.max_file_size:
             return "Файл слишком большой"
 
@@ -275,52 +273,60 @@ class FileClient:
                 md5_hash.update(chunk)
         original_md5 = md5_hash.hexdigest()
 
-        self.send_command({
+        if not self.send_command({
             'command': 'upload',
             'filename': path.name,
             'size': file_size,
-            'md5': original_md5
-        })
+            'md5': original_md5,
+        }):
+            return "Соединение потеряно перед началом загрузки"
 
         response = self.receive_response()
 
-        if not response:
-            return "Нет ответа от сервера"
-
-        if response.get('status') == 'ready':
-
-            uploaded = 0
-            with open(path, 'rb') as f:
-                while True:
-                    chunk = f.read(self.chunk_size)
-                    if not chunk:
-                        break
-
-                    chunk_size = len(chunk)
-                    try:
-                        self.socket.sendall(struct.pack('>I', chunk_size))
-                        self.socket.sendall(chunk)
-                    except (ConnectionError, BrokenPipeError):
-                        return "Соединение разорвано при отправке файла"
-
-                    uploaded += len(chunk)
-
-                    if progress_callback and file_size > 0:
-                        percent = (uploaded / file_size) * 100
-                        progress_callback(percent)
-
-            response = self.receive_response()
-            if response and response.get('status') == 'success':
-                server_md5 = response.get('md5', '')
-                if server_md5 == original_md5:
-                    if progress_callback:
-                        progress_callback(100)
-                    return True
-                return "MD5 хеш загруженного файла не совпадает"
-            else:
-                return response.get('message', 'Неизвестная ошибка') if response else "Нет ответа от сервера"
-        else:
+        err = self._response_error(response)
+        if err:
+            return err
+        if response.get('status') != 'ready':
             return response.get('message', 'Неизвестная ошибка')
+
+        uploaded = 0
+        with open(path, 'rb') as f:
+            while True:
+                chunk = f.read(self.chunk_size)
+                if not chunk:
+                    break
+
+                if not self.socket:
+                    return "Соединение потеряно при отправке файла"
+
+                try:
+                    self.socket.sendall(struct.pack('>I', len(chunk)))
+                    self.socket.sendall(chunk)
+                except socket.timeout:
+                    self._force_close()
+                    return "Таймаут при отправке файла"
+                except ConnectionError as e:
+                    self._force_close()
+                    return f"Соединение разорвано при отправке: {e}"
+                except OSError as e:
+                    self._force_close()
+                    return f"Ошибка сети при отправке: {e}"
+
+                uploaded += len(chunk)
+                if progress_callback and file_size > 0:
+                    progress_callback((uploaded / file_size) * 100)
+
+        response = self.receive_response()
+        err = self._response_error(response)
+        if err:
+            return err
+        if response.get('status') == 'success':
+            if response.get('md5', '') == original_md5:
+                if progress_callback:
+                    progress_callback(100)
+                return True
+            return "MD5 хеш загруженного файла не совпадает"
+        return response.get('message', 'Неизвестная ошибка')
 
     def disconnect(self):
         if self.socket:
@@ -335,62 +341,88 @@ class FileClient:
             self.socket = None
 
     def send_command(self, command):
+        if not self.socket:
+            return False
         try:
             json_data = json.dumps(command).encode('utf-8')
             self.socket.sendall(len(json_data).to_bytes(4, 'big'))
             self.socket.sendall(json_data)
+            return True
         except Exception:
-            return None
+            self._force_close()
+            return False
 
     def receive_all(self, length):
         if not self.socket:
-            return None
+            raise ConnectionError("Соединение потеряно")
 
         data = b''
         while len(data) < length:
             try:
                 chunk = self.socket.recv(min(4096, length - len(data)))
-                if not chunk:
-                    break
-                data += chunk
             except socket.timeout:
-                break
-            except Exception:
-                break
+                self._force_close()
+                raise
+            except OSError as e:
+                self._force_close()
+                raise ConnectionError(f"Ошибка сети: {e}") from e
+            if not chunk:
+                self._force_close()
+                raise ConnectionError("Соединение разорвано сервером")
+            data += chunk
         return data
 
     def receive_response(self):
         try:
+            timeout_val = self.socket.gettimeout() if self.socket else None
             length_data = self.receive_all(4)
-            if not length_data or len(length_data) != 4:
-                return None
-
             data_length = struct.unpack('>I', length_data)[0]
             json_data = self.receive_all(data_length)
-
-            if not json_data:
-                return None
-
-            return json.loads(json_data.decode('utf-8'))
-        except Exception:
-            return None
+            try:
+                return json.loads(json_data.decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ValueError("Некорректный ответ сервера")
+        except socket.timeout:
+            msg = "Таймаут при ожидании данных от сервера"
+            return {
+                'status': 'error',
+                'message': msg,
+                '_error_kind': 'timeout'
+            }
+        except ConnectionError as e:
+            return {
+                'status': 'error',
+                'message': str(e),
+                '_error_kind': 'disconnected'
+            }
+        except ValueError as e:
+            return {
+                'status': 'error',
+                'message': str(e),
+                '_error_kind': 'protocol'
+            }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'message': f"Ошибка: {e}",
+                '_error_kind': 'error'
+            }
 
     def list_files(self):
         self.send_command({'command': 'list'})
         response = self.receive_response()
 
     def delete_file(self, filename):
-        self.send_command({
-            'command': 'delete',
-            'filename': filename
-        })
+        if not self.send_command({'command': 'delete', 'filename': filename}):
+            return "Соединение потеряно перед удалением"
 
         response = self.receive_response()
-        if response and response.get('status') == 'success':
+        err = self._response_error(response)
+        if err:
+            return err
+        if response.get('status') == 'success':
             return True
-        else:
-            error_msg = response.get('message', 'Неизвестная ошибка') if response else 'Нет ответа от сервера'
-            return error_msg
+        return response.get('message', 'Неизвестная ошибка')
 
     def get_server_info(self):
         self.send_command({'command': 'info'})
@@ -422,25 +454,41 @@ class FileClient:
                 pass
 
             t0 = time.time()
-            self.send_command({'command': 'ping'})
+            if not self.send_command({'command': 'ping'}):
+                return {'error': 'Не удалось отправить ping'}
             response = self.receive_response()
             rtt = time.time() - t0
 
-            if response is None:
-                return {'error': 'Нет ответа на ping'}
+            err = self._response_error(response)
+            if err:
+                return {'error': err}
             if response.get('status') != 'success':
                 return {
                     'error': response.get('message', 'Ошибка ping'),
                     'retry_after': response.get('retry_after', 0),
                 }
-
             return {'rtt': rtt}
-
         except Exception as e:
             return {'error': str(e)}
         finally:
-            if old_timeout is not None:
+            if old_timeout is not None and self.socket is not None:
                 try:
                     self.socket.settimeout(old_timeout)
                 except Exception:
                     pass
+
+    def _force_close(self):
+        sock = self.socket
+        self.socket = None
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _response_error(self, response):
+        if response is None:
+            return "Нет ответа от сервера"
+        if response.get('_error_kind'):
+            return response.get('message', 'Ошибка сети')
+        return None

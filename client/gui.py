@@ -299,7 +299,7 @@ class FileManagerGUI:
         try:
             img = Image.open(self.resource_path('icon.png'))
             photo = ImageTk.PhotoImage(img)
-            root.iconphoto(False, photo)
+            root.iconphoto(True, photo)
         except Exception:
             try:
                 root.iconbitmap(self.resource_path('icon.ico'))
@@ -417,7 +417,10 @@ class FileManagerGUI:
                     elif isinstance(result, dict):
                         ra = result.get('retry_after', 0)
                         self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
-                        self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с."))
+                        if ra == 0:
+                            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"{msg}"))
+                        else:
+                            self.root.after(0, lambda msg=result.get('error'), r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с."))
                         self.disconnect_server()
 
                     else:
@@ -566,7 +569,10 @@ class FileManagerGUI:
                     error_msg = connect_result.get('error', 'Заблокировано')
                     self.progress_queue.put({'status': f'Заблокировано на {ra} с.'})
                     self.client = None
-                    self.root.after(0, lambda msg=error_msg, r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с." if r else msg))
+                    if ra == 0:
+                        self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", f"{msg}"))
+                    else:
+                        self.root.after(0, lambda msg=error_msg, r=ra: messagebox.showerror("Ошибка", f"{msg}\nПовторите через {r} с." if r else msg))
 
                 elif isinstance(connect_result, str):
                     self.progress_queue.put({'status': 'Ошибка подключения'})
