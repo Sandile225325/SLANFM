@@ -763,9 +763,8 @@ class FileServer:
                 
                 sent_total += len(chunk)
 
-                if self.progress_should_log(progress_state, sent_total, file_size):
-                    percent = (sent_total / file_size) * 100 if file_size else 0.0
-                    logging.info(f"Отправка {filename}: {percent:.1f}% ({sent_total}/{file_size} байт)")
+                for threshold in self.progress_crossed(progress_state, sent_total, file_size):
+                    self._log_progress("Отправка", filename, progress_state, threshold, sent_total, file_size)
 
         logging.info(f"Файл {filename} отправлен клиенту ({file_size} байт)")
 
@@ -832,9 +831,8 @@ class FileServer:
                         received += len(piece)
                         left -= len(piece)
 
-                        if self.progress_should_log(progress_state, received, file_size):
-                            percent = (received / file_size) * 100 if file_size else 0.0
-                            logging.info(f"Приём {filename}: {percent:.1f}% ({received}/{file_size} байт)")
+                        for threshold in self.progress_crossed(progress_state, received, file_size):
+                            self._log_progress("Приём", filename, progress_state, threshold, received, file_size)
 
             md5_hash = hashlib.md5()
             with open(tmp_path, 'rb') as f:
@@ -969,21 +967,20 @@ class FileServer:
         step_bytes = int(max(1, self.progress_log_value) * 1024 * 1024)
         return {'unit': 'mb', 'step': step_bytes, 'next': step_bytes}
 
-    def progress_should_log(self, state, done, total):
+    def progress_crossed(self, state, done, total):
         if total <= 0:
-            return False
+            return []
+        crossed = []
         if state['unit'] == 'percent':
             percent = (done / total) * 100.0
-            if percent + 1e-9 >= state['next']:
-                while state['next'] <= percent + 1e-9:
-                    state['next'] += state['step']
-                return True
-            return False
-        if done >= state['next']:
-            while state['next'] <= done:
+            while percent + 1e-9 >= state['next']:
+                crossed.append(state['next'])
                 state['next'] += state['step']
-            return True
-        return False
+        else:
+            while done >= state['next']:
+                crossed.append(state['next'])
+                state['next'] += state['step']
+        return crossed
     
     def progress_read_size(self, total_size):
         if total_size <= 0:
@@ -992,9 +989,26 @@ class FileServer:
             step = min(100.0, max(0.0001, float(self.progress_log_value)))
             num_steps = max(1, int(100.0 / step))
             target = math.ceil(total_size / num_steps)
-            return max(1024, min(self.chunk_size, target))
+            return max(1, min(self.chunk_size, target))
         target = int(max(1, self.progress_log_value) * 1024 * 1024)
         return min(self.chunk_size, target)
+    
+    def _format_threshold(self, value):
+        s = f"{value:.6f}".rstrip('0').rstrip('.')
+        return s or "0"
+    
+    def _log_progress(self, action, filename, state, threshold, done, total):
+        if state['unit'] == 'percent':
+            logging.info(
+                f"{action} {filename}: порог {self._format_threshold(threshold)}% "
+                f"({done}/{total} байт)"
+            )
+        else:
+            mb = threshold / (1024 * 1024)
+            logging.info(
+                f"{action} {filename}: {self._format_threshold(mb)} МБ "
+                f"({done}/{total} байт)"
+            )
 
     def receive_all(self, sock, length):
         data = b''
