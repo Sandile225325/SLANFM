@@ -7,6 +7,10 @@ on:
         description: 'Версия релиза'
         required: true
         default: ''
+      description:
+        description: 'Описание релиза'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -85,6 +89,8 @@ jobs:
             dist/SLANFM-server-windows.zip
           tag_name: ${{ github.event.inputs.version }}
           name: Release ${{ github.event.inputs.version }}
+          body: ${{ github.event.inputs.description }}
+          generate_release_notes: true
           draft: false
           prerelease: false
         env:
