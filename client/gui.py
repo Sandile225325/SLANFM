@@ -458,6 +458,7 @@ class FileManagerGUI:
             self.connect_operation = False
             self.ping_suspended = False
             self.change_buttons_state('normal', force=True)
+            self.reset_progress(True)
 
     def connect_server(self):
         if self.operation_in_progress:
@@ -480,6 +481,10 @@ class FileManagerGUI:
         self.change_status_bar('rtt', None)
 
         self.clear_files_list()
+        self.reset_progress(True)
+
+        self.status_text.set("Не подключено")
+        self.change_status_bar('connection', "Не подключено")
 
         ip = user_input
         port = default_port
