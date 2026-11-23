@@ -12,6 +12,7 @@ import shutil
 import hmac
 import time
 import tempfile
+import math
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -748,17 +749,18 @@ class FileServer:
             logging.error("Клиент не подтвердил готовность к приёму файла")
             raise ConnectionError("Клиент не готов к приёму файла")
 
+        send_chunk = self.progress_read_size(file_size)
         progress_state = self.progress_log_state(file_size)
         sent_total = 0
         with open(filepath, 'rb') as f:
             while True:
-                chunk = f.read(self.chunk_size)
+                chunk = f.read(send_chunk)
                 if not chunk:
                     break
 
                 client_socket.sendall(struct.pack('>I', len(chunk)))
                 client_socket.sendall(chunk)
-
+                
                 sent_total += len(chunk)
 
                 if self.progress_should_log(progress_state, sent_total, file_size):
@@ -821,13 +823,18 @@ class FileServer:
                     if chunk_size > remaining:
                         raise ConnectionError(f"Размер чанка {chunk_size} превышает оставшийся {remaining}")
 
-                    chunk = self.receive_all(client_socket, chunk_size)
-                    f.write(chunk)
-                    received += len(chunk)
+                    sub = self.progress_read_size(file_size)
+                    left = chunk_size
+                    while left > 0:
+                        piece_size = min(sub, left)
+                        piece = self.receive_all(client_socket, piece_size)
+                        f.write(piece)
+                        received += len(piece)
+                        left -= len(piece)
 
-                    if self.progress_should_log(progress_state, received, file_size):
-                        percent = (received / file_size) * 100 if file_size else 0.0
-                        logging.info(f"Приём {filename}: {percent:.1f}% ({received}/{file_size} байт)")
+                        if self.progress_should_log(progress_state, received, file_size):
+                            percent = (received / file_size) * 100 if file_size else 0.0
+                            logging.info(f"Приём {filename}: {percent:.1f}% ({received}/{file_size} байт)")
 
             md5_hash = hashlib.md5()
             with open(tmp_path, 'rb') as f:
@@ -977,6 +984,17 @@ class FileServer:
                 state['next'] += state['step']
             return True
         return False
+    
+    def progress_read_size(self, total_size):
+        if total_size <= 0:
+            return self.chunk_size
+        if self.progress_log_unit == 'percent':
+            step = min(100.0, max(0.0001, float(self.progress_log_value)))
+            num_steps = max(1, int(100.0 / step))
+            target = math.ceil(total_size / num_steps)
+            return max(1024, min(self.chunk_size, target))
+        target = int(max(1, self.progress_log_value) * 1024 * 1024)
+        return min(self.chunk_size, target)
 
     def receive_all(self, sock, length):
         data = b''
