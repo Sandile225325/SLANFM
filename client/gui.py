@@ -67,6 +67,8 @@ class FileManagerGUI:
 
         self.ping_suspended = False
 
+        self.ping_backoff_max = 300.0
+
     def start_progress_monitor(self):
         self.check_progress_queue()
         self.root.after(100, self.start_progress_monitor)
@@ -135,7 +137,9 @@ class FileManagerGUI:
             except (TypeError, ValueError):
                 retry = 0.0
             if retry > 0:
-                self.ping_backoff = retry
+                self.ping_backoff = min(max(retry, self.ping_interval), self.ping_backoff_max)
+            else:
+                self.ping_backoff = 0.0
             self.root.after(0, lambda: self.change_status_bar('rtt', 'ошибка'))
             return
 
@@ -313,10 +317,10 @@ class FileManagerGUI:
         self.server_ip.bind('<Return>', self.connect_server_keyboard)
         self.server_ip.bind('<KP_Enter>', self.connect_server_keyboard)
 
-    def change_status_bar(self, type, value):
-        if type == 'connection':
+    def change_status_bar(self, kind, value):
+        if kind == 'connection':
             self.conn_status_value = value
-        elif type == 'rtt':
+        elif kind == 'rtt':
             if self.ping_suspended and value is not None:
                 return
             self.rtt_status_value = value
@@ -443,12 +447,14 @@ class FileManagerGUI:
             threading.Thread(target=auth_thread, daemon=True).start()
 
         else:
-            try:
-                self.client.disconnect()
-            except Exception:
-                pass
-            self.client = None
-            self.connected = False
+            with self.socket_lock:
+                if self.client:
+                    try:
+                        self.client.disconnect()
+                    except Exception:
+                        pass
+                self.client = None
+                self.connected = False
             self.ip = None
             self.port = None
             self.clear_files_list()
@@ -533,14 +539,14 @@ class FileManagerGUI:
             messagebox.showwarning("Внимание", f"Порт должен быть в диапазоне 1..65535")
             return
 
-        if self.client:
-            with self.socket_lock:
+        with self.socket_lock:
+            if self.client:
                 try:
                     self.client.disconnect()
                 except Exception:
                     pass
-            self.client = None
-        self.connected = False
+                self.client = None
+                self.connected = False
         self.ping_backoff = 0.0
 
         self.client = FileClient(ip, port, download_dir=self.download_dir)
