@@ -668,7 +668,7 @@ class FileServer:
                         client_socket.settimeout(None)
                     elif cmd == 'ping':
                         client_socket.settimeout(self.timeout)
-                        self.send_ping_respone(client_socket, address[0])
+                        self.send_ping_response(client_socket, address[0])
                         client_socket.settimeout(None)
                     elif cmd == 'disconnect':
                         break
@@ -914,7 +914,7 @@ class FileServer:
             response = {'status': 'error', 'message': str(e)}
         self.send_response(client_socket, response)
 
-    def send_ping_respone(self, client_socket, client_ip=None):
+    def send_ping_response(self, client_socket, client_ip=None):
         now = time.time()
         response = {'status': 'success', 'timestamp': now}
 
