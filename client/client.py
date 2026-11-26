@@ -207,6 +207,7 @@ class FileClient:
 
         file_size = response['size']
         server_md5 = response.get('md5', '')
+        server_sha256 = response.get('sha256', '')
 
         if not self.send_command({'status': 'ready'}):
             return "Соединение потеряно перед приёмом файла"
@@ -227,13 +228,17 @@ class FileClient:
             if received != file_size:
                 return "Неполная загрузка файла"
 
-            if server_md5:
+            if server_md5 or server_sha256:
                 md5_hash = hashlib.md5()
+                sha256_hash = hashlib.sha256()
                 with open(temp_path, 'rb') as f:
                     for chunk in iter(lambda: f.read(8192), b''):
                         md5_hash.update(chunk)
-                if md5_hash.hexdigest() != server_md5:
+                        sha256_hash.update(chunk)
+                if server_md5 and md5_hash.hexdigest() != server_md5:
                     return "MD5 хеш скачанного файла не совпадает"
+                if server_sha256 and sha256_hash.hexdigest() != server_sha256:
+                    return "SHA-256 хеш скачанного файла не совпадает"
 
             try:
                 os.replace(temp_path, save_path)
@@ -268,16 +273,20 @@ class FileClient:
             return "Файл слишком большой"
 
         md5_hash = hashlib.md5()
+        sha256_hash = hashlib.sha256()
         with open(path, 'rb') as f:
             for chunk in iter(lambda: f.read(8192), b''):
                 md5_hash.update(chunk)
+                sha256_hash.update(chunk)
         original_md5 = md5_hash.hexdigest()
+        original_sha256 = sha256_hash.hexdigest()
 
         if not self.send_command({
             'command': 'upload',
             'filename': path.name,
             'size': file_size,
             'md5': original_md5,
+            'sha256': original_sha256,
         }):
             return "Соединение потеряно перед началом загрузки"
 
@@ -321,11 +330,17 @@ class FileClient:
         if err:
             return err
         if response.get('status') == 'success':
-            if response.get('md5', '') == original_md5:
+            response_md5 = response.get('md5', '')
+            response_sha256 = response.get('sha256', '')
+            md5_ok = (not response_md5) or (response_md5 == original_md5)
+            sha256_ok = (not response_sha256) or (response_sha256 == original_sha256)
+            if md5_ok and sha256_ok:
                 if progress_callback:
                     progress_callback(100)
                 return True
-            return "MD5 хеш загруженного файла не совпадает"
+            if not md5_ok:
+                return "MD5 хеш загруженного файла не совпадает"
+            return "SHA-256 хеш загруженного файла не совпадает"
         return response.get('message', 'Неизвестная ошибка')
 
     def disconnect(self):

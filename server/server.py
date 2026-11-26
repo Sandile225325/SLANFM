@@ -724,10 +724,13 @@ class FileServer:
                 else:
                     file_size = filepath.stat().st_size
                     md5_hash = hashlib.md5()
+                    sha256_hash = hashlib.sha256()
                     with open(filepath, 'rb') as f:
                         for chunk in iter(lambda: f.read(8192), b''):
                             md5_hash.update(chunk)
+                            sha256_hash.update(chunk)
                     file_md5 = md5_hash.hexdigest()
+                    file_sha256 = sha256_hash.hexdigest()
                     err_response = None
         except Exception as e:
             logging.error(f"Ошибка подготовки отправки файла: {e}", exc_info=True)
@@ -741,7 +744,8 @@ class FileServer:
             'status': 'success',
             'size': file_size,
             'filename': filename,
-            'md5': file_md5
+            'md5': file_md5,
+            'sha256': file_sha256,
         })
 
         response = self.receive_response(client_socket)
@@ -760,7 +764,7 @@ class FileServer:
 
                 client_socket.sendall(struct.pack('>I', len(chunk)))
                 client_socket.sendall(chunk)
-                
+
                 sent_total += len(chunk)
 
                 for threshold in self.progress_crossed(progress_state, sent_total, file_size):
@@ -791,6 +795,7 @@ class FileServer:
                         except OSError:
                             err_response = None
                     expected_md5 = command.get('md5')
+                    expected_sha256 = command.get('sha256')
         except Exception as e:
             logging.error(f"Ошибка валидации загрузки: {e}", exc_info=True)
             err_response = {'status': 'error', 'message': str(e)}
@@ -835,10 +840,13 @@ class FileServer:
                             self._log_progress("Приём", filename, progress_state, threshold, received, file_size)
 
             md5_hash = hashlib.md5()
+            sha256_hash = hashlib.sha256()
             with open(tmp_path, 'rb') as f:
                 for chunk in iter(lambda: f.read(8192), b''):
                     md5_hash.update(chunk)
+                    sha256_hash.update(chunk)
             computed_md5 = md5_hash.hexdigest()
+            computed_sha256 = sha256_hash.hexdigest()
 
             if expected_md5 and computed_md5 != expected_md5:
                 self.send_response(client_socket, {
@@ -846,6 +854,14 @@ class FileServer:
                     'message': 'MD5 хеш полученного файла не совпадает с заявленным'
                 })
                 logging.error(f"MD5 не совпадает для {filename}")
+                return
+
+            if expected_sha256 and computed_sha256 != expected_sha256:
+                self.send_response(client_socket, {
+                    'status': 'error',
+                    'message': 'SHA-256 хеш полученного файла не совпадает с заявленным'
+                })
+                logging.error(f"SHA-256 не совпадает для {filename}")
                 return
 
             try:
@@ -858,7 +874,8 @@ class FileServer:
             self.send_response(client_socket, {
                 'status': 'success',
                 'message': 'Файл загружен',
-                'md5': computed_md5
+                'md5': computed_md5,
+                'sha256': computed_sha256,
             })
             logging.info(f"Файл {filename} успешно загружен на сервер ({file_size} байт)")
 
