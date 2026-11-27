@@ -43,6 +43,17 @@ class FileClient:
                 except Exception:
                     pass
                 return f"Не удалось установить соединение с сервером: {init_response.get('message', 'неизвестная ошибка')}"
+            
+            if init_response.get('type') == 'init' and init_response.get('status') == 'error':
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                msg = init_response.get('message', 'сервер отклонил подключение')
+                max_clients = init_response.get('max_clients')
+                if max_clients:
+                    msg += f" (максимум: {max_clients})"
+                return f"Не удалось установить соединение с сервером: {msg}"
 
             if init_response.get('type') == 'init' and not init_response.get('tls_required'):
                 self.socket = sock
