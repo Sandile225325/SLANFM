@@ -79,6 +79,8 @@ The server configuration is stored in the file **`server/server_config.json`**.
 | `ping_min_interval`                   | number  | Minimum interval between ping requests from one IP in seconds                                                |
 | `progress_log_unit`                   | string  | Unit for logging transfer progress. `percent` — as a percentage, `mb` — in megabytes                         |
 | `progress_log_value`                  | number  | Interval value for progress logging in `progress_log_unit` units                                             |
+| `clients_limit_enabled`               | boolean | Whether to limit the number of concurrent clients                                                            |
+| `clients_limit`                       | number  | Maximum number of concurrent clients. Only used when `clients_limit_enabled` is `true`                       |
 
 ### Client
 
@@ -115,8 +117,8 @@ After execution, the files **`private_key.key`** and **`certificate.crt`** will 
 
 ### Server
 
-The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, brute-force token protection, ping rate limiting, and progress logging is displayed.
-During operation, client actions (uploads, downloads, deletions) are logged.
+The server runs in console mode. On startup, information about the host, port, server files folder, authentication, TLS, brute-force token protection, ping rate limiting, progress logging, and the clients limit status are displayed.
+During operation, client actions (connections, disconnections, authentication attempts, uploads, downloads, deletions) are logged.
 
 ### Client
 
