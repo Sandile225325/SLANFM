@@ -59,6 +59,10 @@ class FileServer:
         self.ping_last_cleanup = 0.0
         self.progress_log_value = 10
         self.progress_log_unit = 'mb'
+        self.clients_limit = 100
+        self.clients_limit_enabled = False
+        self.client_count = 0
+
 
         if config_path:
             self.load_config(config_path)
@@ -177,21 +181,21 @@ class FileServer:
                 if isinstance(max_json_size, int) and 1024 <= max_json_size <= 64 * 1024 * 1024:
                     self.max_json_size = max_json_size
                 else:
-                    logging.warning(f"Некорректный max_json_size: {max_json_size}. Используется значение {self.max_json_size}")
+                    logging.warning(f"Некорректный max_json_size в конфиге: {max_json_size}. Используется значение {self.max_json_size}")
 
             if 'auth_rate_limit_enabled' in config:
                 auth_rate_limit_enabled = config['auth_rate_limit_enabled']
                 if isinstance(auth_rate_limit_enabled, bool):
                     self.auth_rate_limit_enabled = auth_rate_limit_enabled
                 else:
-                    logging.warning(f"Некорректный auth_rate_limit_enabled: {auth_rate_limit_enabled}. Используется значение {self.auth_rate_limit_enabled}")
+                    logging.warning(f"Некорректный auth_rate_limit_enabled в конфиге: {auth_rate_limit_enabled}. Используется значение {self.auth_rate_limit_enabled}")
 
             if 'ping_rate_limit_enabled' in config:
                 ping_rate_limit_enabled = config['ping_rate_limit_enabled']
                 if isinstance(ping_rate_limit_enabled, bool):
                     self.ping_rate_limit_enabled = ping_rate_limit_enabled
                 else:
-                    logging.warning(f"Некорректный ping_rate_limit_enabled: {ping_rate_limit_enabled}. Используется значение {self.ping_rate_limit_enabled}")
+                    logging.warning(f"Некорректный ping_rate_limit_enabled в конфиге: {ping_rate_limit_enabled}. Используется значение {self.ping_rate_limit_enabled}")
 
             if 'progress_log_unit' in config:
                 progress_log_unit = config['progress_log_unit']
@@ -199,28 +203,42 @@ class FileServer:
                     normalized = progress_log_unit.strip().lower()
                     self.progress_log_unit = 'percent' if normalized in ('percent', '%') else 'mb'
                 else:
-                    logging.warning(f"Некорректный progress_log_unit: {progress_log_unit}. Используется значение {self.progress_log_unit}")
+                    logging.warning(f"Некорректный progress_log_unit в конфиге: {progress_log_unit}. Используется значение {self.progress_log_unit}")
 
             if 'progress_log_value' in config:
                 progress_log_value = config['progress_log_value']
                 if isinstance(progress_log_value, (int, float)) and progress_log_value > 0:
                     if self.progress_log_unit == 'percent' and progress_log_value > 100:
                         self.progress_log_value = 20
-                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 20")
+                        logging.warning(f"Некорректный progress_log_value в конфиге: {progress_log_value}. Используется значение 20")
                     else:
                         self.progress_log_value = progress_log_value
                 else:
                     if self.progress_log_unit == 'percent':
                         self.progress_log_value = 20
-                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 20")
+                        logging.warning(f"Некорректный progress_log_value в конфиге: {progress_log_value}. Используется значение 20")
                     else:
-                        logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение {self.progress_log_value}")
+                        logging.warning(f"Некорректный progress_log_value в конфиге: {progress_log_value}. Используется значение {self.progress_log_value}")
                 if self.progress_log_unit == 'mb' and self.progress_log_value < 1:
                     self.progress_log_value = 1
-                    logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 1")
+                    logging.warning(f"Некорректный progress_log_value в конфиге: {progress_log_value}. Используется значение 1")
                 if self.progress_log_unit == 'percent' and self.progress_log_value < 0.0001:
                     self.progress_log_value = 0.0001
-                    logging.warning(f"Некорректный progress_log_value: {progress_log_value}. Используется значение 0.0001")
+                    logging.warning(f"Некорректный progress_log_value в конфиге: {progress_log_value}. Используется значение 0.0001")
+
+            if 'clients_limit_enabled' in config:
+                clients_limit_enabled = config['clients_limit_enabled']
+                if isinstance(clients_limit_enabled, bool):
+                    self.clients_limit_enabled = clients_limit_enabled
+                else:
+                    logging.warning(f"Некорректный clients_limit_enabled в конфиге: {clients_limit_enabled}. Используется значение {self.clients_limit_enabled}")
+
+            if 'clients_limit' in config:
+                clients_limit = config['clients_limit']
+                if isinstance(clients_limit, int) and clients_limit > 0:
+                    self.clients_limit = clients_limit
+                else:
+                    logging.warning(f"Некорректный clients_limit в конфиге: {clients_limit}. Используется значение {self.clients_limit}")
 
             def _pos_int(key, default):
                 v = config.get(key)
@@ -240,7 +258,7 @@ class FileServer:
             if isinstance(auth_rate_limit_failure_delay, (int, float)) and 0 <= auth_rate_limit_failure_delay <= 10:
                 self.auth_failure_delay = float(auth_rate_limit_failure_delay)
             elif 'auth_rate_limit_failure_delay' in config:
-                logging.warning(f"Некорректный auth_rate_limit_failure_delay: {auth_rate_limit_failure_delay}. Используется значение {self.auth_failure_delay}")
+                logging.warning(f"Некорректный auth_rate_limit_failure_delay в конфиге: {auth_rate_limit_failure_delay}. Используется значение {self.auth_failure_delay}")
 
             self.ping_rate_limit_max = _pos_int('ping_rate_limit_max', self.ping_rate_limit_max)
             self.ping_rate_limit_window = float(_pos_int('ping_rate_limit_window', int(self.ping_rate_limit_window)))
@@ -249,7 +267,7 @@ class FileServer:
             if isinstance(ping_min_interval, (int, float)) and ping_min_interval >= 0.01:
                 self.ping_min_interval = float(ping_min_interval)
             elif 'ping_min_interval' in config:
-                logging.warning(f"Некорректный ping_min_interval: {ping_min_interval}. Используется значение {self.ping_min_interval}")
+                logging.warning(f"Некорректный ping_min_interval в конфиге: {ping_min_interval}. Используется значение {self.ping_min_interval}")
 
             self.temp_dir = self.upload_dir / '.tmp'
             self.temp_dir.mkdir(exist_ok=True)
@@ -399,6 +417,7 @@ class FileServer:
         token_rate_limit_enabled = 'включена' if self.auth_token and self.auth_rate_limit_enabled else 'выключена'
         ping_rate_limit_enabled = 'включена' if self.ping_rate_limit_enabled else 'выключена'
         progress_unit_label = '%' if self.progress_log_unit == 'percent' else 'МБ'
+        clients_limit_enabled = f'включено (максимум: {self.clients_limit})' if self.clients_limit_enabled else 'выключено'
         logging.info(f"Сервер запущен на {self.host}:{self.port}")
         logging.info(f"Директория для серверных файлов: {self.upload_dir.absolute()}")
         logging.info(f"Аутентификация для пользователей {auth_required}")
@@ -406,6 +425,7 @@ class FileServer:
         logging.info(f"Защита от брутфорса {token_rate_limit_enabled}")
         logging.info(f"Ping-защита {ping_rate_limit_enabled}")
         logging.info(f"Логирование прогресса: каждые {self.progress_log_value} {progress_unit_label}")
+        logging.info(f"Ограничение количества клиентов {clients_limit_enabled}")
 
         try:
             while True:
@@ -523,20 +543,50 @@ class FileServer:
     def handle_client(self, client_socket, address, is_tls=False):
         peer = f"{address[0]}:{address[1]}"
         connected = False
+        counted = False
 
         try:
+            if self.tls_enabled and not is_tls:
+                self.send_response(client_socket, {
+                    'type': 'init',
+                    'chunk_size': self.chunk_size,
+                    'max_file_size': self.max_file_size,
+                    'timeout': self.timeout,
+                    'auth_required': bool(self.auth_token),
+                    'tls_required': True,
+                })
+                logging.warning(f"Клиент {peer} отклонён: требуется TLS-соединение")
+                return
+
+            with self.clients_lock:
+                if self.clients_limit_enabled and self.client_count >= self.clients_limit:
+                    limit_reached = True
+                else:
+                    self.client_count += 1
+                    counted = True
+                    limit_reached = False
+
+            if limit_reached:
+                logging.warning(f"Клиент {peer} отклонён: достигнут лимит ({self.client_count}/{self.clients_limit})")
+                try:
+                    self.send_response(client_socket, {
+                        'type': 'init',
+                        'status': 'error',
+                        'message': 'Сервер перегружен: достигнут лимит клиентов',
+                        'max_clients': self.clients_limit,
+                    })
+                except Exception:
+                    pass
+                return
+
             self.send_response(client_socket, {
                 'type': 'init',
                 'chunk_size': self.chunk_size,
                 'max_file_size': self.max_file_size,
                 'timeout': self.timeout,
                 'auth_required': bool(self.auth_token),
-                'tls_required': self.tls_enabled and not is_tls
+                'tls_required': False,
             })
-
-            if self.tls_enabled and not is_tls:
-                logging.warning(f"Клиент {peer} отклонён: требуется TLS-соединение")
-                return
 
             if self.auth_token:
                 client_ip = address[0]
@@ -694,6 +744,9 @@ class FileServer:
                 client_socket.close()
             except Exception:
                 pass
+            if counted:
+                with self.clients_lock:
+                    self.client_count -= 1
             if connected:
                 logging.info(f"Клиент {peer} отключён")
 
