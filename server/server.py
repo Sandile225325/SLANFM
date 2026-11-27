@@ -62,7 +62,7 @@ class FileServer:
         self.clients_limit = 100
         self.clients_limit_enabled = False
         self.client_count = 0
-
+        self.clients_lock = threading.Lock()
 
         if config_path:
             self.load_config(config_path)
